@@ -1,9 +1,13 @@
 import json, math, statistics as st, urllib.request, datetime as dt
 import xml.etree.ElementTree as ET
+import sys
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 UA = {"User-Agent": "Mozilla/5.0"}
 FEEDS = ["https://www.bankier.pl/rss/wiadomosci.xml", "https://www.bankier.pl/rss/gielda.xml",
-         "https://www.bankier.pl/rss/surowce.xml", "https://www.bankier.pl/rss/waluty.xml"]
+         "https://www.bankier.pl/rss/firma.xml", "https://www.bankier.pl/rss/espi.xml",
+         "https://www.bankier.pl/rss/waluty.xml"]
 POS = ["wzrost", "rośnie", "rosną", "zysk", "rekord", "odbicie", "dywidend", "poprawa", "przejęci", "umocnien"]
 NEG = ["spadek", "spadk", "spada", "strata", "obaw", "kryzys", "przecen", "cięci", "kara", "pozew", "wyprzedaż", "załamani", "osłabien"]
 
