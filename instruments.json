@@ -1,0 +1,16 @@
+[
+ {"name":"Tauron","symbol":"TPE.WA","group":"Akcje GPW","keywords":["tauron"]},
+ {"name":"CD Projekt","symbol":"CDR.WA","group":"Akcje GPW","keywords":["cd projekt","cdp","wiedźmin","cyberpunk"]},
+ {"name":"PKO BP","symbol":"PKO.WA","group":"Akcje GPW","keywords":["pko bp","pko"]},
+ {"name":"Orlen","symbol":"PKN.WA","group":"Akcje GPW","keywords":["orlen"]},
+ {"name":"Bitcoin","symbol":"BTC-USD","group":"Krypto","keywords":["bitcoin","btc","kryptowalut"]},
+ {"name":"Srebro (CFD)","symbol":"SI=F","group":"Surowce","keywords":["srebro","srebra","srebrze"]},
+ {"name":"Złoto (CFD)","symbol":"GC=F","group":"Surowce","keywords":["złoto","złota","złocie"]},
+ {"name":"Ropa Brent","symbol":"BZ=F","group":"Surowce","keywords":["ropa","ropy","ropie","brent"]},
+ {"name":"Apple","symbol":"AAPL","group":"Akcje USA","keywords":["apple","iphone"]},
+ {"name":"Microsoft","symbol":"MSFT","group":"Akcje USA","keywords":["microsoft"]},
+ {"name":"Nvidia","symbol":"NVDA","group":"Akcje USA","keywords":["nvidia"]},
+ {"name":"Tesla","symbol":"TSLA","group":"Akcje USA","keywords":["tesla"]},
+ {"name":"Amazon","symbol":"AMZN","group":"Akcje USA","keywords":["amazon"]},
+ {"name":"S&P 500","symbol":"^GSPC","group":"Indeksy","keywords":["s&p 500","wall street"]}
+]

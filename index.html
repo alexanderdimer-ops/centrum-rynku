@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Centrum rynku</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eaf0ee;--ink:#14232b;--mut:#5d6d75;--card:#fff;--line:#d5dfdc;--up:#1f9d6b;--mid:#8a96a0;--down:#d0533d;--acc:#0f766e}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 "IBM Plex Sans",system-ui,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:26px;margin:0 0 4px}.top{display:flex;flex-wrap:wrap;gap:12px;align-items:end;justify-content:space-between;margin-bottom:16px}
+.upd{color:var(--mut);font-size:13px}
+.ctl{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.ctl button,.ctl input{font:inherit;padding:9px 14px;border:1px solid var(--line);background:#fff;border-radius:8px;color:var(--ink)}
+.ctl button[aria-pressed=true]{background:var(--acc);color:#fff;border-color:var(--acc)}.ctl input{flex:1;min-width:160px}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card header{display:flex;gap:10px;align-items:start;margin-bottom:12px}.card header>div:first-child{flex:1}
+h2{font-size:18px;margin:0}.sub{color:var(--mut);font-size:13px}.px{text-align:right;font-weight:600}
+.chg{display:block;font-size:13px}.chg.up{color:var(--up)}.chg.down{color:var(--down)}
+.heart{border:0;background:none;font-size:24px;cursor:pointer;color:var(--mut);line-height:1;padding:2px}.heart[aria-pressed=true]{color:var(--down)}
+.row{display:grid;grid-template-columns:1fr 46px;gap:2px 8px;margin-bottom:8px}.row span{font-size:13.5px}.row em{font-style:normal;font-weight:600;text-align:right}
+.row .bar{grid-column:1/2}.row small{grid-column:1/3;color:var(--mut);font-size:12px}
+.bar{position:relative;height:8px;background:#e6ecea;border-radius:4px;overflow:hidden;align-self:center}
+.bar i{display:block;height:100%}.bar b{position:absolute;left:50%;top:0;bottom:0;width:2px;background:#fff}
+.total{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}.total .bar{height:14px;border-radius:7px;margin:6px 0}
+.total strong{font-size:22px}.v{font-weight:600}
+details{margin-top:10px;font-size:13px}summary{cursor:pointer;color:var(--acc)}ul{padding-left:18px;margin:6px 0}
+li a{color:var(--ink)}.t{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.msg{padding:24px;background:#fff;border:1px dashed var(--line);border-radius:10px;color:var(--mut)}
+footer{margin-top:24px;color:var(--mut);font-size:12.5px;max-width:80ch}
+</style></head><body><div class="wrap">
+<div class="top"><div><h1>Centrum rynku</h1><div class="upd" id="upd"></div></div></div>
+<div class="ctl"><button id="bf" aria-pressed="true">Ulubione</button><button id="ba" aria-pressed="false">Wszystkie</button>
+<input id="q" type="search" placeholder="Szukaj instrumentu" aria-label="Szukaj instrumentu"></div>
+<div id="out" class="grid"></div>
+<footer>Paski pokazują szacowaną szansę, że kolejna sesja zakończy się wzrostem. Kreska na środku to 50%. Pasek zbiorczy to średnia dostępnych metod. To szacunki statystyczne, nie rekomendacja inwestycyjna i nie gwarancja wyniku. Dane cenowe mogą być opóźnione.</footer>
+</div><script>
+const DEF=["TPE.WA","CDR.WA","BTC-USD","SI=F","GC=F","AAPL"];
+let D=null,tab="fav",fav=DEF;
+try{fav=JSON.parse(localStorage.getItem("fav")||"null")||DEF}catch(e){}
+const col=p=>p>=58?"var(--up)":p>=46?"var(--mid)":"var(--down)";
+const bar=p=>`<div class="bar"><i style="width:${p}%;background:${col(p)}"></i><b></b></div>`;
+const fmt=(n,d=2)=>n.toLocaleString("pl-PL",{maximumFractionDigits:d});
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function card(it){const f=fav.includes(it.symbol);
+ const rows=it.methods.map(m=>`<div class="row"><span>${esc(m.name)}</span><em>${m.p==null?"–":fmt(m.p,0)+"%"}</em>${bar(m.p??0)}<small>${esc(m.note)}</small></div>`).join("");
+ const news=it.news.map(n=>`<li><span class="t" style="background:${n.tone>0.2?"var(--up)":n.tone<-0.2?"var(--down)":"var(--mid)"}"></span><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a></li>`).join("");
+ return `<article class="card"><header><div><h2>${esc(it.name)}</h2><span class="sub">${esc(it.symbol)}, ${esc(it.group)}</span></div>
+ <div class="px">${fmt(it.price)} ${esc(it.currency)}<span class="chg ${it.change>=0?"up":"down"}">${it.change>=0?"+":""}${fmt(it.change)}%</span></div>
+ <button class="heart" data-s="${esc(it.symbol)}" aria-pressed="${f}" aria-label="${f?"Usuń z ulubionych":"Dodaj do ulubionych"}">${f?"♥":"♡"}</button></header>
+ ${rows}<div class="total"><span>Czy warto wejść teraz?</span>${bar(it.overall)}<strong style="color:${col(it.overall)}">${fmt(it.overall,0)}%</strong> <span class="v">${esc(it.verdict)}</span></div>
+ <details><summary>Newsy (${it.news.length})</summary>${news?`<ul>${news}</ul>`:"<p>Brak świeżych newsów o tym instrumencie.</p>"}</details></article>`}
+function render(){const q=document.getElementById("q").value.toLowerCase();
+ const list=D.items.filter(i=>(tab==="all"||fav.includes(i.symbol))&&(i.name+i.symbol).toLowerCase().includes(q));
+ document.getElementById("out").innerHTML=list.length?list.map(card).join(""):`<div class="msg">${tab==="fav"?"Brak ulubionych. Przejdź do „Wszystkie” i kliknij serduszko przy instrumencie.":"Nic nie pasuje do wyszukiwania."}</div>`}
+document.addEventListener("click",e=>{const h=e.target.closest(".heart");if(!h)return;const s=h.dataset.s;
+ fav=fav.includes(s)?fav.filter(x=>x!==s):[...fav,s];try{localStorage.setItem("fav",JSON.stringify(fav))}catch(e){}render()});
+function setTab(t){tab=t;bf.setAttribute("aria-pressed",t==="fav");ba.setAttribute("aria-pressed",t==="all");if(D)render()}
+bf.onclick=()=>setTab("fav");ba.onclick=()=>setTab("all");q.oninput=()=>D&&render();
+fetch("data.json?"+Date.now()).then(r=>r.json()).then(d=>{D=d;upd.textContent="Ostatnia aktualizacja: "+new Date(d.updated).toLocaleString("pl-PL");render()})
+ .catch(()=>{out.innerHTML='<div class="msg">Brak pliku data.json. Uruchom workflow „Aktualizacja danych” w zakładce Actions na GitHubie.</div>'});
+</script></body></html>
