@@ -1,7 +1,9 @@
 # CLAUDE.md: "Centrum rynku" (market info dashboard)
 
 ## About the user
-- Polish speaker, **no technical or programming experience**. Reply in the language the user writes in (Polish or English).
+- Polish speaker, **no technical or programming experience**. **Correspond in Polish** (user's request on 2026-10-11).
+- The user's Windows and GitHub interface are **in English**: name programs, menus and buttons in English exactly as on screen (e.g. "Credential Manager", "Settings → Pages", "Run workflow"), explanations in Polish.
+- The user may type fast without Polish characters and with typos; read for intent.
 - Explain things in plain, simple words. Before any larger change, say in one or two sentences what you are going to do. Avoid jargon; if you must use a term, explain it briefly.
 - The user is a **day trader** interested in: Polish stocks (GPW), US stocks, commodities (gold, silver, oil), indices and Bitcoin.
 - Budget for data: **0 PLN, free sources only**.
@@ -43,12 +45,35 @@ A personal website that collects market data and news automatically and shows, f
 - Default favorites: Tauron (TPE.WA), CD Projekt (CDR.WA), Bitcoin (BTC-USD), Silver CFD (SI=F), Gold CFD (GC=F), Apple (AAPL).
 - Gold and silver "CFD" are shown through futures (GC=F, SI=F), which track CFD prices closely but are not the broker's quotes.
 
+## Setup and workflow (state on 2026-10-11)
+- Local folder `C:\Users\nachu\Desktop\Claude` is a git clone of https://github.com/alexanderdimer-ops/centrum-rynku (branch `main`). Git identity in local config: alexanderdimer-ops.
+- GitHub sign-in is stored by Git Credential Manager. If `git push` from the Bash tool fails with an auth error, run `git push origin main` in a terminal tab (run_in_terminal) so the browser sign-in can appear; the user signs in themselves (never enter credentials).
+- The bot commits `data.json` every 15 minutes on weekdays: always `git pull --rebase origin main` before committing; on a `data.json` conflict just regenerate it with `python fetch_data.py`.
+- GitHub Pages is enabled (Deploy from branch `main`, `/ (root)`); the workflow "Aktualizacja danych" is enabled and was run successfully by hand.
+- Local preview: `.claude/launch.json` config "strona" (`python -m http.server 8765`); `.claude/` is gitignored.
+- On Windows run Python with `PYTHONIOENCODING=utf-8` when printing Polish text from ad-hoc scripts (`fetch_data.py` already sets UTF-8 itself).
+- Method bar colors (validated for the dark background with the dataviz palette validator): Historia #3987e5, Sezonowość #d95926, Trend #9085e9, Zmienność #c98500, Newsy #d55181, Otoczenie #1d9bb0. Up #22c55e, down #ef4444, neutral verdict #eab308.
+
 ## Known limitations and open items
 - Live data verified on 2026-10-11. Yahoo is unofficial and may change or block; Stooq is behind a bot check (do not use).
 - Free data may be delayed. The page is an information and context tool, not for scalping.
-- Weekends: the workflow runs Monday to Friday only.
+- Weekends: the workflow runs Monday to Friday only, so Bitcoin is not refreshed on weekends (offered to change; user has not decided).
+- Summaries are rule-based text, not AI. English headlines are not translated. News tone is a simple keyword dictionary.
+- Google News queries can pull noise (e.g. "Tauron Liga" sports); fix by refining `news_pl`/`news_en` with `-word` exclusions.
+- Backtest hit rates are about 47-57%: the bars are context, not a reliable prediction. Keep saying this honestly.
 
 ## Planned next steps (ask the user before starting)
+Suggestions given to the user on 2026-10-11 for beginners (I recommended starting with A, B, C; user has not chosen yet):
+- A. Position size calculator (account size + stop loss -> how much to buy so the risk is 1-2%).
+- B. Event calendar (company earnings, Fed/NBP decisions, inflation data).
+- C. "Is the market open now" indicator with session hours (GPW, US, commodities, crypto).
+- D. CFD cost warnings (spread, overnight swap, leverage risk).
+- E. Trade journal (user logs entries/exits, page shows what works).
+- F. Paper-trading simulator (practice on the page's signals without real money).
+- G. Price-level alerts (e.g. "gold above 4 445").
+- H. Intraday (hourly) data for fresher prices during the session.
+
+Earlier roadmap:
 1. ~~Verify live data~~ (done). ~~Basic backtest and weighting~~ (done).
 2. Improve accuracy: better methods, calibration of probabilities.
 3. Add more methods: analyst forecasts, prediction markets (Polymarket/Kalshi), event calendar (macro data, company earnings).
