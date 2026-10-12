@@ -1,7 +1,8 @@
 name: Aktualizacja danych
 on:
   schedule:
-    - cron: "*/15 * * * 1-5"
+    - cron: "*/15 * * * 1-5"   # dni robocze: co 15 minut
+    - cron: "7 */2 * * 0,6"    # weekend: co 2 godziny (Bitcoin handluje całą dobę)
   workflow_dispatch:
 permissions:
   contents: write
@@ -14,6 +15,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python fetch_data.py
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       - run: |
           git config user.name "dane-bot"
           git config user.email "bot@users.noreply.github.com"

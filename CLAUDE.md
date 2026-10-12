@@ -12,12 +12,17 @@
 A personal website that collects market data and news automatically and shows, for each instrument, several independent probability bars plus one overall bar answering: "Is it worth entering now?"
 
 ## How it works (no server, all free)
-1. `fetch_data.py` runs every 15 minutes on weekdays via GitHub Actions (`.github/workflows/update.yml`).
-2. It downloads 5 years of daily prices from the unofficial Yahoo Finance chart endpoint (instruments + reference markets: WIG20 via ETF `ETFBW20TR.WA`, `^GSPC`, `^IXIC`, `^VIX`, `PLN=X`, `DX-Y.NYB`), news from Google News RSS (per instrument, English + Polish, last 14 days) and Bankier.pl RSS (`wiadomosci`, `gielda`, `firma`, `espi`, `waluty`; `surowce.xml` no longer exists).
+1. `fetch_data.py` runs via GitHub Actions (`.github/workflows/update.yml`): every 15 minutes Mon-Fri, every 2 hours on weekends (Bitcoin).
+2. Data sources (no API keys):
+   - Prices: Yahoo Finance chart endpoint, 5 years daily + last session in 5-minute bars ("Dziś" chart). Reference markets: WIG20 via ETF `ETFBW20TR.WA`, `^GSPC`, `^IXIC`, `^VIX`, `PLN=X`, `EURPLN=X`, `DX-Y.NYB`.
+   - Calendar: ForexFactory weekly JSON `nfs.faireconomy.media/ff_calendar_thisweek.json` (macro; rate-limited with HTTP 429, so fetched at most once per hour, otherwise reused from previous `data.json`), Nasdaq `api.nasdaq.com/api/analyst/<SYM>/earnings-date` (US earnings, Zacks consensus), Bankier per-company page `bankier.pl/gielda/notowania/akcje/<CODE>/kalendarium` (GPW results, dividends, AGMs; parsed from HTML).
+   - News: Google News RSS per instrument (EN + PL, 14 days) and Bankier RSS (`wiadomosci`, `gielda`, `firma`, `espi`, `waluty`).
+   - Not usable: Stooq and nbp.pl (bot protection, do not bypass), Yahoo quoteSummary (needs crumb), Bankier `surowce.xml` (gone). No free automatic source for Polish macro (RPP, GUS) yet.
 3. Yahoo sometimes "freezes" daily bars (same close, zero volume, seen on GPW stocks). The script detects this and rebuilds the last days from 60-minute bars.
-4. It analyses everything itself (no copied opinions) and writes `data.json`, which the workflow commits back to the repo.
-5. `index.html` (static page on GitHub Pages: https://alexanderdimer-ops.github.io/centrum-rynku/) reads `data.json` and renders the list and a detail view per instrument (`#i=SYMBOL`).
-6. The list of instruments lives in `instruments.json` (fields: `name`, `symbol` as on Yahoo Finance, `group`, `ref` reference market symbol, `news_en` / `news_pl` Google News queries, `keywords` for matching Bankier headlines).
+4. It analyses everything itself and writes `data.json` (items, pulse, fx, calendar), which the workflow commits back.
+5. The page (GitHub Pages: https://alexanderdimer-ops.github.io/centrum-rynku/) is `index.html` + `style.css` + `app.js` (bump the `?v=N` query in `index.html` after changing CSS/JS so browsers don't use the old cached file).
+6. `instruments.json` fields: `name`, `symbol` (Yahoo), `group`, `ref` (reference market), `bankier` (Bankier code, GPW only), `earnings` (true for US stocks), `macro` (currencies whose macro events affect it), `oil` (oil-inventory events), `lev` (ESMA retail max leverage), `spread` (% typical), `lot` (units per CFD lot), `unit`, `news_en`/`news_pl` (Google News queries, may use `-word` exclusions), `keywords` (Bankier matching).
+7. Optional phone alerts: if GitHub secret `NTFY_TOPIC` exists, `notify()` posts to ntfy.sh when a decision changes or price crosses resistance/support (compares with previous `data.json`). Not set up yet.
 
 ## Probability bars (each = estimated chance the next session closes UP)
 1. **Historia**: share of up-days following a day with the same direction as the last one (last ~500 sessions).
@@ -25,25 +30,29 @@ A personal website that collects market data and news automatically and shows, f
 3. **Trend i momentum**: heuristic from RSI(14) and price vs SMA20/SMA50.
 4. **Model zmienności**: normal-distribution estimate from 20-day mean return vs 60-day volatility, shrunk toward 50%.
 5. **Otoczenie rynku**: 60-day correlation with the reference market times that market's trend (max ±12 pp).
-6. **Nastrój newsów**: keyword-based sentiment (PL + EN dictionaries) of last-7-day headlines (no value if there are none). Not backtestable.
-- **Backtest**: methods 1-5 are re-run day by day over the last ~500 sessions; hit rate over the last 250 is shown per method. Weights = clamp(1 + 8*(acc - 0.5), 0.3, 1.8); news weight 0.8. The overall bar's own hit rate is measured with weights from the earlier half only (no look-ahead). Hit rates are close to 50%: say so honestly.
-- **Overall bar** = weighted average of available methods. Verdict: >= 58 favorable, 46-58 neutral, < 46 unfavorable.
-- All values are clamped to 5-95%. These are statistical estimates, not investment advice. Keep the disclaimer in the page footer.
+6. **Nastrój newsów**: keyword sentiment (PL + EN, phrase rules like "record low") of last-7-day headlines, weighted by source tier (official 1.3, tier1 1.0, tier2 0.6, other 0.3). Not backtestable, weight 0.8.
+- **Backtest**: methods 1-5 re-run day by day over ~500 sessions; hit rate over the last 250 shown per method; weights = clamp(1 + 8*(acc - 0.5), 0.3, 1.8), computed out-of-sample for the overall test.
+- **Calibration** (shown as "Szansa wzrostu jutro"): p = base up-rate (last 500 sessions) + k*(raw - 50), where k = out-of-sample regression slope of outcome on raw score, clamped 0..1 (often 0, so p is close to the base rate). If VIX > 25 the deviation from 50 is shrunk by 0.7. Clamp 5-95.
+- **Weekly chance**: historical analogs (same SMA50 side + RSI bucket, 5 years), shrunk toward the base weekly up-rate.
+- **Verdict / decision** (setup quality, not a probability): checklist of 6 conditions (above SMA50, above SMA20, RSI 50-70, close above 20-session high, reference market favorable, calibrated p > 50). good = all but one met and p >= 50; bad = <= 1 met or p < 45; else neutral. Decision: "Możesz rozważyć wejście" / "Poczekaj…" (also when earnings within 3 days, high-impact macro within 1 day, or risk level 4) / "Nie wchodź teraz". Adds a warning when, on that instrument, such setups historically did no better than average (`setup_history`).
+- These are statistical estimates, not investment advice. Keep the disclaimer in the page footer.
 
 ## Generated analysis (all computed in `fetch_data.py`, Polish text)
-- Plain-language summary (trend vs SMA50/200, performance, RSI, volatility regime, 52-week range, news tone, reference market, backtest honesty line).
-- Plan "Czy warto wejść teraz?": checklist of up-conditions with concrete price levels (resistance/support = 20-session high/low, SMA20/50), concrete signals to wait for, warning level, and for favorable verdicts stop loss (2×ATR) and target (3×ATR).
-- Forecast: volatility-based 68% price ranges (next session, week, month) and historical analogs (same trend state + RSI bucket over 5 years: share up, median, quartiles).
-- News per instrument split into last 7 days / 7-14 days ago, with counts, tone and frequent topics.
+- Plain-language summary (trend, performance, RSI, volatility regime, 52-week range, risk, news, reference market, setup history, backtest honesty line).
+- Plan with concrete price levels (resistance/support = 20-session high/low, SMA20/50), signals to wait for, warning level; for favorable: stop 2×ATR, target 3×ATR.
+- Risk profile: annualized volatility level 1-4 (<15%, <35%, <60%, more), +1 for imminent events, +1 if VIX > 25; worst day, max drawdown, 5% daily VaR, overnight gaps.
+- Forecast: 68% price ranges (next session, week, month), analogs, setup history.
+- News per instrument: last 7 days / 7-14 days ago, sorted credible-first, with counts, tone, topics and source tier tags.
 
 ## UI requirements (set by the user)
-- Easy, intuitive, works on phone and desktop. Polish interface text. Dark black/grey theme.
+- Clean, readable, intuitive, not cluttered; phone and desktop. Polish interface text. Dark black/grey theme.
 - Colors: rises and probabilities above 50% green, falls and below 50% red; each method bar has its own color.
-- Explain everything step by step for a total beginner (glossary and "how to use" guide on the page).
-- Detail view: chart with selectable range (week, month, 3M, 6M, year, 5 years), boxes "Teraz", "Przyszłość – prognoza", methods, news.
-- Heart button per instrument to add or remove favorites; tabs "Ulubione" / "Wszystkie"; search box. Favorites are stored in the browser (`localStorage`).
-- Default favorites: Tauron (TPE.WA), CD Projekt (CDR.WA), Bitcoin (BTC-USD), Silver CFD (SI=F), Gold CFD (GC=F), Apple (AAPL).
-- Gold and silver "CFD" are shown through futures (GC=F, SI=F), which track CFD prices closely but are not the broker's quotes.
+- Explain everything step by step for a total beginner.
+- Main navigation (bottom bar on phones): **Rynki** (market status GPW/USA/commodities/crypto, pulse, favorites/all, cards with decision + risk + upcoming event), **Kalendarz** (grouped by day, filters favorites/all and all/important/macro/companies, instrument chips), **Dziennik** (paper vs real trades in localStorage, live P/L in PLN and R, stop/target hit hints, 3% daily loss stop, export/import JSON), **Poradnik** (decision steps, safety rules, source credibility tiers, alerts info, limitations, glossary).
+- Instrument view tabs (`#i=SYMBOL/tab`): Decyzja, Wykres (Dziś/1T/1M/3M/6M/Rok/5 lat + levels), Kalkulator ryzyka, Prognoza, Newsy i wydarzenia.
+- Position calculator: capital and risk % (saved), CFD vs no leverage, long/short, entry/stop/target (suggested 2×/3×ATR), leverage (ESMA default), spread, commission, overnight cost, days; outputs units/lots, value, margin, loss/gain in PLN (USD/EUR converted), R:R, break-even win rate, driftless chance target-before-stop, expected value after costs, gap risk, 10-loss streak, broker minimum (0.01 lot) check, events, verdict; save to journal.
+- Heart favorites (localStorage). Default favorites: Tauron (TPE.WA), CD Projekt (CDR.WA), Bitcoin (BTC-USD), Silver CFD (SI=F), Gold CFD (GC=F), Apple (AAPL).
+- Gold, silver and oil "CFD" are shown through futures (GC=F, SI=F, BZ=F), which track CFD prices closely but are not the broker's quotes.
 
 ## Setup and workflow (state on 2026-10-11)
 - Local folder `C:\Users\nachu\Desktop\Claude` is a git clone of https://github.com/alexanderdimer-ops/centrum-rynku (branch `main`). Git identity in local config: alexanderdimer-ops.
@@ -55,30 +64,18 @@ A personal website that collects market data and news automatically and shows, f
 - Method bar colors (validated for the dark background with the dataviz palette validator): Historia #3987e5, Sezonowość #d95926, Trend #9085e9, Zmienność #c98500, Newsy #d55181, Otoczenie #1d9bb0. Up #22c55e, down #ef4444, neutral verdict #eab308.
 
 ## Known limitations and open items
-- Live data verified on 2026-10-11. Yahoo is unofficial and may change or block; Stooq is behind a bot check (do not use).
-- Free data may be delayed. The page is an information and context tool, not for scalping.
-- Weekends: the workflow runs Monday to Friday only, so Bitcoin is not refreshed on weekends (offered to change; user has not decided).
-- Summaries are rule-based text, not AI. English headlines are not translated. News tone is a simple keyword dictionary.
-- Google News queries can pull noise (e.g. "Tauron Liga" sports); fix by refining `news_pl`/`news_en` with `-word` exclusions.
-- Backtest hit rates are about 47-57%: the bars are context, not a reliable prediction. Keep saying this honestly.
+- Yahoo is unofficial and may change or block. Free data may be delayed ~15 min; not for scalping.
+- Market hours ignore holidays. Polish macro calendar missing. English headlines not translated. Summaries are rule-based, not AI.
+- Google News queries can pull noise (e.g. "Tauron Liga" sports); refine `news_pl`/`news_en` with `-word` exclusions.
+- Backtest hit rates are about 47-57% and calibration k is often 0: the page is a risk/decision-discipline tool, not a predictor. Keep saying this honestly.
 
 ## Planned next steps (ask the user before starting)
-Suggestions given to the user on 2026-10-11 for beginners (I recommended starting with A, B, C; user has not chosen yet):
-- A. Position size calculator (account size + stop loss -> how much to buy so the risk is 1-2%).
-- B. Event calendar (company earnings, Fed/NBP decisions, inflation data).
-- C. "Is the market open now" indicator with session hours (GPW, US, commodities, crypto).
-- D. CFD cost warnings (spread, overnight swap, leverage risk).
-- E. Trade journal (user logs entries/exits, page shows what works).
-- F. Paper-trading simulator (practice on the page's signals without real money).
-- G. Price-level alerts (e.g. "gold above 4 445").
-- H. Intraday (hourly) data for fresher prices during the session.
-
-Earlier roadmap:
-1. ~~Verify live data~~ (done). ~~Basic backtest and weighting~~ (done).
-2. Improve accuracy: better methods, calibration of probabilities.
-3. Add more methods: analyst forecasts, prediction markets (Polymarket/Kalshi), event calendar (macro data, company earnings).
-4. Make adding new instruments easier (the user currently edits `instruments.json` on GitHub).
-5. Optional alerts when the overall probability crosses a threshold.
+Done on 2026-10-12: position/risk calculator, event calendar, market hours, CFD cost/leverage info, trade journal + paper trading, intraday chart, source credibility tiers, calibration, weekly chance, setup history, weekend updates, optional ntfy alerts (code ready).
+Open ideas:
+- Set up phone alerts (user installs the ntfy app, adds `NTFY_TOPIC` secret in GitHub → Settings → Secrets and variables → Actions).
+- Polish macro calendar (RPP decisions, GUS inflation) from a free source; holiday calendars for market hours.
+- Better prediction: longer walk-forward tests, multi-day horizons, analyst consensus/target prices, COT reports for commodities, options-implied volatility, seasonality by month.
+- Make adding new instruments easier (the user currently edits `instruments.json` on GitHub).
 
 ## Working rules
 - Keep everything free. Do not add paid APIs or require API keys without asking.
