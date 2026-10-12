@@ -149,3 +149,18 @@ table.fc{width:100%;border-collapse:collapse;font-size:14px;margin:6px 0 12px}
 .gl{display:grid;gap:8px;margin-top:10px}.gl b{color:var(--ink)}.gl div{color:var(--mut);font-size:14px}
 .src td,.src th{text-align:left;vertical-align:top}
 footer{color:var(--dim);font-size:12.5px;padding:8px 16px 30px;max-width:1100px;margin:0 auto}
+
+/* teraz warto, świece, powiadomienia */
+.stats4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+@media (max-width:640px){.stats4{grid-template-columns:repeat(2,1fr)}}
+.stats4 .stat strong{font-size:20px}
+.opp{margin-bottom:0}.opp .spark{margin:8px 0}
+.nav a{position:relative}
+.nav a[data-badge]:not([data-badge=""])::after{content:attr(data-badge);position:absolute;top:2px;right:2px;background:var(--down);color:#fff;font-size:10.5px;font-weight:600;border-radius:999px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 4px}
+#toast{position:fixed;left:50%;transform:translateX(-50%) translateY(20px);bottom:24px;max-width:min(92vw,520px);background:var(--card2);border:1px solid var(--line2);border-radius:12px;padding:12px 16px;font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:30}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media (max-width:640px){#toast{bottom:84px}}
+.cbox{background:var(--card2);border-radius:10px;padding:12px 14px;margin-top:10px}
+.pat{border-top:1px solid var(--line2);margin-top:10px;padding-top:10px;font-size:14px}.pat p{margin:4px 0}
+.linkbtn{border:0;background:none;padding:0;color:var(--ink);font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.howto{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-top:8px}.howto ul{flex:1;min-width:220px}

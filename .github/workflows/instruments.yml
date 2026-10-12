@@ -1,0 +1,44 @@
+name: Zmiana listy instrumentów
+# Uruchamia się, gdy właściciel repozytorium utworzy zgłoszenie (issue) z tytułem "Dodaj: ..." lub "Usuń: ...".
+on:
+  issues:
+    types: [opened]
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: dane
+  cancel-in-progress: false
+jobs:
+  manage:
+    if: github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Zmień listę
+        run: python manage_instruments.py
+        env:
+          TITLE: ${{ github.event.issue.title }}
+      - name: Przelicz dane i zapisz
+        run: |
+          if [ "$(cat changed)" = "1" ]; then
+            python fetch_data.py
+            git config user.name "dane-bot"
+            git config user.email "bot@users.noreply.github.com"
+            git add instruments.json data.json
+            git commit -m "Lista instrumentów: ${ISSUE_TITLE}"
+            for i in 1 2 3; do git pull --rebase -X theirs origin main && git push && break; sleep 5; done
+          fi
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+      - name: Odpowiedz i zamknij zgłoszenie
+        if: always()
+        run: |
+          gh issue comment "$NUM" --body-file result.md || true
+          gh issue close "$NUM" || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUM: ${{ github.event.issue.number }}

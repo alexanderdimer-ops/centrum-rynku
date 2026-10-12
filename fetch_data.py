@@ -32,11 +32,12 @@ PHRASES_NEG = ["record low", "all-time low", "najniżej od", "lowest since", "mi
                "obniża prognoz", "obniża rekomendacj", "profit warning"]
 POS = ["wzrost", "wzrosł", "rośnie", "rosną", "zysk", "odbici", "dywidend", "poprawa", "przejęci", "umocni",
        "zwyżk", "drożej", "podwyżk", "surge", "soar", "rall", "jump", "gain", "rise", "rising", "beat", "upgrade",
-       "bullish", "boost", "strong", "growth", "rebound", "recover", "outperform", "higher", "climb", "advance"]
+       "bullish", "boost", "strong", "growth", "rebound", "recover", "outperform", "climb", "advance", "highest"]
 NEG = ["spadek", "spadk", "spada", "spadł", "strata", "strat", "obaw", "kryzys", "przecen", "cięci", "kara",
        "pozew", "wyprzedaż", "załamani", "osłabi", "taniej", "zwolnie", "fall", "drop", "plunge", "slump",
        "declin", "loss", "miss", "downgrade", "bearish", "weak", "fear", "crash", "tumble", "lawsuit", "probe",
-       "sell-off", "selloff", "slide", "lower", "recession", "warn", "sink", "slip", "concern"]
+       "sell-off", "selloff", "slide", "recession", "warn", "sink", "slip", "concern", "pull back", "pullback",
+       "retreat", "bleed", "lowest"]
 STOP = set("""the and for with from that this will are was its has have after over into amid as at by on in of to
 a an is be it or not new says said how why what when who more than could would can may just about price prices stock stocks
 shares share today week year years market markets news update latest live vs per amid ahead first his her their our
@@ -45,7 +46,8 @@ oraz jest się nie dla przez jak już ale czy też tak pod nad przy jego jej ich
 będzie są był była było bardzo tylko roku dziś cena ceny kurs akcje akcji spółka spółki rynek rynku proc
 january february march april june july august september october november december monday tuesday wednesday
 thursday friday saturday sunday stycznia lutego marca kwietnia maja czerwca lipca sierpnia września października
-listopada grudnia poniedziałek wtorek środa czwartek piątek sobota niedziela""".split())
+listopada grudnia poniedziałek wtorek środa czwartek piątek sobota niedziela dzisiaj nadal uncję uncji
+forecast prognoza ounce another again still""".split())
 
 # Wiarygodność źródeł: 0 = oficjalne (komunikaty spółek, banki centralne), 1 = najbardziej wiarygodne
 # agencje i redakcje finansowe, 2 = dobre serwisy uzupełniające, 3 = pozostałe (najmniejsza waga).
@@ -94,6 +96,18 @@ MACRO_PL = [("Non-Farm Employment Change", "Raport z rynku pracy (NFP) – liczb
             ("Durable Goods", "Zamówienia na dobra trwałe"), ("Pending Home Sales", "Sprzedaż domów w toku"),
             ("New Home Sales", "Sprzedaż nowych domów"), ("Existing Home Sales", "Sprzedaż domów z rynku wtórnego"),
             ("Flash", "Wstępny odczyt"), ("Employment Change", "Zmiana zatrudnienia")]
+MACRO_HINT = [
+    (("CPI", "PPI", "PCE"), "Wyższa inflacja niż prognoza oddala obniżki stóp – zwykle silniejszy dolar, słabsze złoto i akcje. Niższa – odwrotnie."),
+    (("Non-Farm", "Employment Change", "Average Hourly"), "Więcej miejsc pracy / szybszy wzrost płac niż prognoza – silniejszy dolar, zwykle słabsze złoto; mniej – odwrotnie."),
+    (("Unemployment",), "Wyższe bezrobocie niż prognoza – słabsza gospodarka, większa szansa na obniżki stóp: zwykle dobre dla złota, słabszy dolar."),
+    (("Federal Funds", "FOMC", "Fed Chair", "Main Refinancing", "Monetary Policy", "ECB"), "Decyzja lub sygnały o stopach: obniżki zwykle pomagają akcjom, złotu i krypto; podwyżki lub „twardy” ton – szkodzą."),
+    (("Retail Sales", "GDP", "PMI", "ISM", "Philly", "Empire", "Durable", "Industrial", "Sentiment", "Confidence", "ZEW", "Ifo"), "Lepszy odczyt niż prognoza = silniejsza gospodarka: zwykle dobre dla akcji i ropy, silniejszy dolar. Gorszy – odwrotnie."),
+    (("Crude Oil",), "Większy wzrost zapasów niż prognoza = słabszy popyt: zwykle spadek ceny ropy. Spadek zapasów – wzrost ceny."),
+    (("Bank Holiday",), "Mniejsza płynność – ruchy cen mogą być nietypowe."),
+]
+EVENT_HINT = {"wyniki": "Wyniki lepsze od prognoz analityków zwykle podnoszą cenę, gorsze – obniżają. Ruch bywa duży (5–10%) i nagły.",
+              "dywidenda": "W dniu odcięcia dywidendy cena akcji spada mniej więcej o jej wartość – to normalne, posiadacz dostaje gotówkę.",
+              "wza": "Walne zgromadzenie zwykle ma mały wpływ, chyba że decyduje o dywidendzie lub dużych zmianach w spółce."}
 PERIOD = {"m/m": " (miesiąc do miesiąca)", "y/y": " (rok do roku)", "q/q": " (kwartał do kwartału)"}
 
 
@@ -132,10 +146,12 @@ def chart_url(sym, rng, interval):
     return f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?range={rng}&interval={interval}"
 
 _cache = {}
-def history(sym):
-    if sym in _cache:
-        return _cache[sym]
-    d = get_json(chart_url(sym, "5y", "1d"))["chart"]["result"][0]
+def history(sym, rng="5y"):
+    if (sym, rng) in _cache:
+        return _cache[(sym, rng)]
+    if rng != "5y" and (sym, "5y") in _cache:
+        return _cache[(sym, "5y")]
+    d = get_json(chart_url(sym, rng, "1d"))["chart"]["result"][0]
     q = d["indicators"]["quote"][0]
     by_day, vol = {}, {}
     for t, o, h, l, c, v in zip(d["timestamp"], q["open"], q["high"], q["low"], q["close"], q["volume"]):
@@ -150,35 +166,48 @@ def history(sym):
         k -= 1
     if k < len(days) - 1:
         hd = get_json(chart_url(sym, "1mo", "60m"))["chart"]["result"][0]
-        hq, agg = hd["indicators"]["quote"][0], {}
-        for t, o, h, l, c in zip(hd["timestamp"], hq["open"], hq["high"], hq["low"], hq["close"]):
+        hq, agg, hv = hd["indicators"]["quote"][0], {}, {}
+        for t, o, h, l, c, v in zip(hd["timestamp"], hq["open"], hq["high"], hq["low"], hq["close"], hq["volume"]):
             if c is not None:
                 day = dt.datetime.fromtimestamp(t, dt.timezone.utc).date()
                 a = agg.setdefault(day, [o or c, h or c, l or c, c])
                 a[1], a[2], a[3] = max(a[1], h or c), min(a[2], l or c), c
+                hv[day] = hv.get(day, 0) + (v or 0)
         for day in days[k + 1:]:
             if day not in agg:
                 del by_day[day]
         for day, bar in agg.items():
             if day > days[k]:
                 by_day[day] = tuple(bar)
+                vol[day] = hv.get(day, 0)
         print("Naprawiono zamrożone ceny dzienne:", sym)
         days = sorted(by_day)
     out = {"d": days, "o": [by_day[x][0] for x in days], "h": [by_day[x][1] for x in days],
-           "l": [by_day[x][2] for x in days], "c": [by_day[x][3] for x in days], "cur": d["meta"].get("currency", "")}
-    _cache[sym] = out
+           "l": [by_day[x][2] for x in days], "c": [by_day[x][3] for x in days], "v": [vol.get(x, 0) for x in days],
+           "cur": d["meta"].get("currency", ""), "name": d["meta"].get("longName") or d["meta"].get("shortName") or sym,
+           "type": d["meta"].get("instrumentType", "")}
+    _cache[(sym, rng)] = out
     return out
 
 def intraday(sym):
     """Ceny z ostatniej sesji co 5 minut (do wykresu „Dziś”)."""
     d = get_json(chart_url(sym, "1d", "5m"))["chart"]["result"][0]
-    pts = [(t, c) for t, c in zip(d.get("timestamp") or [], d["indicators"]["quote"][0]["close"]) if c is not None]
+    q = d["indicators"]["quote"][0]
+    pts = [(t, c) for t, c in zip(d.get("timestamp") or [], q["close"]) if c is not None]
     if len(pts) < 2:
         return None
+    bars = [(t, o or c, h or c, l or c, c) for t, o, h, l, c in
+            zip(d["timestamp"], q["open"], q["high"], q["low"], q["close"]) if c is not None]
+    cnd = {"t": [], "o": [], "h": [], "l": [], "c": []}
+    for k in range(0, len(bars), 3):  # 3 × 5 minut = świeca 15-minutowa
+        g = bars[k:k + 3]
+        for key, val in (("t", g[0][0]), ("o", g[0][1]), ("h", max(x[2] for x in g)), ("l", min(x[3] for x in g)),
+                         ("c", g[-1][4])):
+            cnd[key].append(val if key == "t" else float(f"{val:.6g}"))
     step = max(1, len(pts) // 160)
     pts = pts[::step] + ([pts[-1]] if (len(pts) - 1) % step else [])
     return {"t": [t for t, _ in pts], "c": [float(f"{c:.6g}") for _, c in pts],
-            "prev": d["meta"].get("chartPreviousClose")}
+            "prev": d["meta"].get("chartPreviousClose"), "cnd": cnd}
 
 def rets(c): return [0.0] + [c[k] / c[k - 1] - 1 for k in range(1, len(c))]
 def sma(c, i, n): return mean(c[i - n + 1:i + 1])
@@ -348,7 +377,8 @@ def macro_events(instruments, prev_cal):
             syms = []
         if not syms:
             continue
-        out.append({"date": when.astimezone(dt.timezone.utc).isoformat(), "time": True, "kind": "makro",
+        hint = next((t for keys, t in MACRO_HINT if any(k.lower() in title.lower() for k in keys)), "")
+        out.append({"date": when.astimezone(dt.timezone.utc).isoformat(), "time": True, "kind": "makro", "hint": hint,
                     "impact": {"High": "high", "Medium": "mid"}.get(imp, "low"), "title": macro_title(title, cur),
                     "orig": title, "forecast": e.get("forecast") or "", "previous": e.get("previous") or "",
                     "symbols": syms, "source": "ForexFactory"})
@@ -407,6 +437,9 @@ def calendar(instruments, prev_cal):
             print("Kalendarz spółki pominięty:", ins["symbol"], e)
     seen, out = set(), []
     for e in sorted(ev, key=lambda e: e["date"]):
+        if not e.get("hint"):
+            e["hint"] = (next((t for keys, t in MACRO_HINT if any(k.lower() in e.get("orig", "").lower() for k in keys)), "")
+                         if e["kind"] == "makro" else EVENT_HINT.get(e["kind"], ""))
         key = (e["date"], e.get("orig", e["title"]), e.get("desc", ""))
         if key not in seen:
             seen.add(key); e["days"] = (event_day(e) - TODAY_PL).days; out.append(e)
@@ -443,6 +476,7 @@ def google(q, lang):
     return rss(f"https://news.google.com/rss/search?q={urllib.parse.quote(q + ' when:14d')}&{loc}", desc=False)
 
 def instrument_news(ins, bankier):
+    kind = market_kind(ins["symbol"], ins["group"])
     raw = []
     for lang, key in (("en", "news_en"), ("pl", "news_pl")):
         if ins.get(key):
@@ -459,9 +493,11 @@ def instrument_news(ins, bankier):
         if key in seen or not -1 < age <= 14:
             continue
         seen.add(key)
+        text = (x["title"] + " " + x["desc"]).lower()
+        d_, why = interpret(text, kind)
         out.append({"title": x["title"], "link": x["link"], "source": x["source"], "date": x["date"].isoformat(),
                     "age": age, "lang": x["lang"], "tier": tier_of(x["source"]),
-                    "tone": round(tone((x["title"] + " " + x["desc"]).lower()), 2)})
+                    "tone": round(tone(text), 2), "dir": d_, "why": why})
     return out
 
 def news_period(items, ins):
@@ -469,7 +505,9 @@ def news_period(items, ins):
         return {"count": 0, "text": "Brak wiadomości w tym okresie.", "items": [], "tone": 0}
     pos = sum(x["tone"] > 0.2 for x in items); neg = sum(x["tone"] < -0.2 for x in items)
     wsum = sum(TIER_W[x["tier"]] for x in items)
-    avg = sum(x["tone"] * TIER_W[x["tier"]] for x in items) / wsum  # ważone wiarygodnością źródła
+    val = lambda x: {"up": 0.6, "down": -0.6}.get(x.get("dir"), 0) * 0.5 + x["tone"] * 0.5
+    avg = sum(val(x) * TIER_W[x["tier"]] for x in items) / wsum  # ważone wiarygodnością źródła
+    pos = sum(x.get("dir") == "up" for x in items); neg = sum(x.get("dir") == "down" for x in items)
     good = sum(x["tier"] <= 1 for x in items)
     own = " ".join([ins["name"], ins.get("news_en", ""), ins.get("news_pl", "")] + ins["keywords"]).lower()
     skip = STOP | set(re.findall(r"\w+", own))
@@ -485,7 +523,7 @@ def news_period(items, ins):
         text += " Najczęstsze tematy: " + ", ".join(top) + "."
     shown = sorted(items, key=lambda x: (min(x["tier"], 2), x["age"]))[:10]  # najpierw wiarygodne, potem najnowsze
     return {"count": len(items), "good": good, "pos": pos, "neg": neg, "tone": round(avg, 2), "text": text,
-            "items": [{k: x[k] for k in ("title", "link", "source", "date", "lang", "tone", "tier")} for x in shown]}
+            "items": [{k: x[k] for k in ("title", "link", "source", "date", "lang", "tone", "tier", "dir", "why")} for x in shown]}
 
 
 # ---------- ryzyko ----------
@@ -653,6 +691,432 @@ def decide(vkey, plan, events_soon, risk, setups):
     return {"key": key, "title": title, "reasons": reasons}
 
 
+# ---------- świece japońskie ----------
+PATTERN_DIR = {"hammer": "up", "inv_hammer": "up", "bull_engulf": "up", "bull_harami": "up", "piercing": "up",
+               "morning_star": "up", "three_soldiers": "up", "bull_marubozu": "up",
+               "hanging_man": "down", "shooting_star": "down", "bear_engulf": "down", "bear_harami": "down",
+               "dark_cloud": "down", "evening_star": "down", "three_crows": "down", "bear_marubozu": "down",
+               "doji": "neutral"}
+
+def patterns_at(o, h, l, c, i):
+    """Formacje świecowe kończące się na świecy i (bez zaglądania w przyszłość)."""
+    if i < 12:
+        return []
+    def body(k): return abs(c[k] - o[k])
+    def rng(k): return max(h[k] - l[k], 1e-12)
+    def up(k): return c[k] > o[k]
+    def upper(k): return h[k] - max(o[k], c[k])
+    def lower(k): return min(o[k], c[k]) - l[k]
+    avg_body = mean([body(k) for k in range(i - 10, i)]) or 1e-12
+    down_tr = c[i - 1] < sma(c, i - 1, 10)
+    up_tr = c[i - 1] > sma(c, i - 1, 10)
+    out = []
+    b, r = body(i), rng(i)
+    if b <= 0.1 * r and r > 0.5 * avg_body:
+        out.append("doji")
+    if lower(i) >= 2 * b and upper(i) <= 0.25 * r and b > 0.05 * r:
+        out.append("hammer" if down_tr else "hanging_man" if up_tr else None)
+    if upper(i) >= 2 * b and lower(i) <= 0.25 * r and b > 0.05 * r:
+        out.append("inv_hammer" if down_tr else "shooting_star" if up_tr else None)
+    if b >= 0.85 * r and b > 1.5 * avg_body:
+        out.append("bull_marubozu" if up(i) else "bear_marubozu")
+    p = i - 1
+    if not up(p) and up(i) and o[i] <= c[p] and c[i] >= o[p] and b > body(p) and down_tr:
+        out.append("bull_engulf")
+    if up(p) and not up(i) and o[i] >= c[p] and c[i] <= o[p] and b > body(p) and up_tr:
+        out.append("bear_engulf")
+    if body(p) > avg_body and b < 0.5 * body(p) and max(o[i], c[i]) <= max(o[p], c[p]) and min(o[i], c[i]) >= min(o[p], c[p]):
+        if not up(p) and up(i) and down_tr:
+            out.append("bull_harami")
+        if up(p) and not up(i) and up_tr:
+            out.append("bear_harami")
+    mid = (o[p] + c[p]) / 2
+    if not up(p) and body(p) > avg_body and up(i) and o[i] < c[p] and mid < c[i] < o[p]:
+        out.append("piercing")
+    if up(p) and body(p) > avg_body and not up(i) and o[i] > c[p] and o[p] < c[i] < mid:
+        out.append("dark_cloud")
+    a = i - 2
+    if body(a) > avg_body and body(p) < 0.4 * body(a):
+        if not up(a) and up(i) and c[i] > (o[a] + c[a]) / 2 and down_tr:
+            out.append("morning_star")
+        if up(a) and not up(i) and c[i] < (o[a] + c[a]) / 2 and up_tr:
+            out.append("evening_star")
+    three = [i - 2, i - 1, i]
+    if all(up(k) and body(k) > 0.6 * rng(k) for k in three) and c[i - 2] < c[i - 1] < c[i]:
+        out.append("three_soldiers")
+    if all(not up(k) and body(k) > 0.6 * rng(k) for k in three) and c[i - 2] > c[i - 1] > c[i]:
+        out.append("three_crows")
+    return [x for x in out if x]
+
+def candle_patterns(H, hzn=3, keep=260):
+    """Formacje z ostatniego roku + jak działały na tym instrumencie w 5 lat (po 3 sesjach)."""
+    o, h, l, c = H["o"], H["h"], H["l"], H["c"]
+    n = len(c)
+    stats, recent = {}, []
+    base = [c[i + hzn] > c[i] for i in range(12, n - hzn)]
+    for i in range(12, n):
+        for key in patterns_at(o, h, l, c, i):
+            if i >= n - keep:
+                recent.append({"i": i - (n - keep), "key": key})
+            if i < n - hzn:
+                s_ = stats.setdefault(key, [0, 0, 0.0])
+                s_[0] += 1; s_[1] += c[i + hzn] > c[i]; s_[2] += c[i + hzn] / c[i] - 1
+    out_stats = {k: {"n": v[0], "up": v[1] / v[0], "avg": v[2] / v[0]} for k, v in stats.items() if v[0] >= 5}
+    return recent, out_stats, (mean([float(x) for x in base]) if base else 0.5)
+
+
+# ---------- szansa w najbliższych godzinach ----------
+def hourly_chance(sym, hz=4):
+    """Szansa, że za ok. 4 godziny handlu cena będzie wyżej – z historii świec godzinowych (6 miesięcy)."""
+    d = get_json(chart_url(sym, "6mo", "60m"))["chart"]["result"][0]
+    c = [x for x in d["indicators"]["quote"][0]["close"] if x is not None]
+    n = len(c)
+    if n < 200:
+        return None
+    def state(i): return (c[i] > c[i - 1], c[i] > sma(c, i, 20), rsi_bucket(rsi(c, i)))
+    states = {i: state(i) for i in range(21, n)}
+    split = int(n * 0.7)
+    def table(lo, hi):
+        t = {}
+        for i in range(lo, hi - hz):
+            x = t.setdefault(states[i], [0, 0]); x[0] += c[i + hz] > c[i]; x[1] += 1
+        return t
+    def prob(t, st_, base):
+        u, m = t.get(st_, [0, 0]); return (u + base * 20) / (m + 20)
+    base_tr = mean([float(c[i + hz] > c[i]) for i in range(21, split - hz)])
+    tr = table(21, split)
+    hits = [(prob(tr, states[i], base_tr) > 0.5) == (c[i + hz] > c[i]) for i in range(split, n - hz)
+            if abs(prob(tr, states[i], base_tr) - 0.5) > 0.005]
+    full = table(21, n)
+    base = mean([float(c[i + hz] > c[i]) for i in range(21, n - hz)])
+    p = prob(full, states[n - 1], base)
+    return {"p": round(p * 100, 1), "acc": round(100 * mean([float(x) for x in hits]), 1) if len(hits) > 30 else None,
+            "n": full.get(states[n - 1], [0, 0])[1], "base": round(base * 100, 1),
+            "trend": "rośnie" if states[n - 1][1] else "spada"}
+
+
+# ---------- co news oznacza dla ceny ----------
+R_RATE_CUT = r"rate cuts?|cuts? (interest )?rates|obniżk\w* stóp|obniż\w* stopy|dovish"
+R_RATE_HIKE = r"rate hikes?|hikes? (interest )?rates|raises? rates|podwyżk\w* stóp|podniesie stopy|hawkish"
+NEWS_RULES = [  # (wzorzec, dla jakich rynków, kierunek, wyjaśnienie)
+    (r"beats? (estimates|expectations|forecasts)|tops estimates|lepsze od oczekiwań|powyżej oczekiwań|above expectations",
+     "stocks", "up", "Wyniki lepsze od oczekiwań zwykle podnoszą cenę akcji."),
+    (r"miss(es)? (estimates|expectations)|gorsze od oczekiwań|poniżej oczekiwań|below expectations|falls short",
+     "stocks", "down", "Wyniki gorsze od oczekiwań zwykle obniżają cenę akcji."),
+    (r"upgrade|podwyższ\w* rekomendac|raises? (its |price )?target|podnosi cenę docelową", "stocks", "up",
+     "Analitycy podnieśli ocenę lub cenę docelową – to często przyciąga kupujących."),
+    (r"downgrade|obniż\w* rekomendac|cuts? (its |price )?target|lowers? (its |price )?target|obniża cenę docelową",
+     "stocks", "down", "Analitycy obniżyli ocenę – część inwestorów sprzedaje."),
+    (r"raises? (guidance|outlook|forecast)|podnosi prognoz", "stocks", "up",
+     "Spółka podniosła prognozy – rynek zwykle nagradza lepsze perspektywy."),
+    (r"(cuts?|lowers?) (guidance|outlook|forecast)|obniża prognoz|profit warning", "stocks", "down",
+     "Spółka obniżyła prognozy – to zwykle mocno ciąży cenie."),
+    (r"buyback|skup\w* akcji", "stocks", "up", "Skup akcji własnych zmniejsza liczbę akcji na rynku i wspiera cenę."),
+    (r"lawsuit|probe|investigation|antitrust|pozew|śledztw|\bkar[aęy]\b|fined?\b", "stocks crypto", "down",
+     "Problemy prawne zwiększają niepewność i zwykle ciążą cenie."),
+    (r"dividend|dywidend", "stocks", "up", "Dywidenda przyciąga inwestorów (w dniu odcięcia cena spada o jej wartość)."),
+    (R_RATE_CUT, "stocks metals crypto", "up", "Niższe stopy procentowe to tańszy pieniądz – zwykle pomaga akcjom, złotu i krypto."),
+    (R_RATE_HIKE, "stocks metals crypto", "down", "Wyższe stopy procentowe zwykle szkodzą akcjom, złotu i krypto."),
+    (r"inflation (cools|eases|slows|falls)|inflacja (spada|hamuje|niższa|zwalnia)", "stocks metals crypto", "up",
+     "Słabnąca inflacja zwiększa szansę na obniżki stóp."),
+    (r"inflation (heats|hotter|rises|jumps|accelerates)|hot(ter)? cpi|inflacja (rośnie|przyspiesza|wyższa)",
+     "stocks crypto", "down", "Rosnąca inflacja oddala obniżki stóp – zwykle szkodzi akcjom."),
+    (r"strong(er)? dollar|dollar (rises|gains|strengthens|jumps|climbs)|dolar (zyskuje|umacnia|rośnie|drożeje)",
+     "metals", "down", "Silny dolar zwykle ciąży złotu i srebru (są wyceniane w dolarach)."),
+    (r"weak(er)? dollar|dollar (falls|slips|weakens|drops|slides)|dolar (traci|słabnie|tanieje)", "metals", "up",
+     "Słabszy dolar zwykle pomaga złotu i srebru."),
+    (r"safe.haven|bezpieczn\w* przystan|geopolit|\bwar\b|wojn|conflict|konflikt|tensions|napięci", "metals", "up",
+     "Niepokój na świecie zwiększa popyt na złoto i srebro jako „bezpieczną przystań”."),
+    (r"central banks? (buy|buying|purchases|add)|banki centralne kupują|zakupy banków centralnych", "metals", "up",
+     "Zakupy banków centralnych to duży, stały popyt na złoto."),
+    (r"opec\+? (cut|cuts|reduce|curbs)|output cuts?|production cuts?|cięci\w* wydobyci|ogranicz\w* wydobyci", "oil", "up",
+     "Mniejsze wydobycie oznacza mniej ropy na rynku – zwykle wyższa cena."),
+    (r"opec\+? (raise|raises|increase|boost|hike)|output (hike|increase|boost)|zwiększ\w* wydobyci", "oil", "down",
+     "Większe wydobycie oznacza więcej ropy na rynku – zwykle niższa cena."),
+    (r"inventor(y|ies) (build|rise|jump|climb)|crude stocks rise|wzrost zapasów", "oil", "down",
+     "Rosnące zapasy ropy oznaczają słabszy popyt – zwykle niższa cena."),
+    (r"inventor(y|ies) (draw|fall|drop|decline)|spadek zapasów", "oil", "up",
+     "Spadające zapasy oznaczają silny popyt – zwykle wyższa cena ropy."),
+    (r"sanction|sankcj|supply disruption|attack|atak|blockade|blokad", "oil", "up",
+     "Zakłócenia dostaw zmniejszają podaż ropy – zwykle cena rośnie."),
+    (r"recession|recesj|slowdown|spowolni", "stocks oil crypto", "down",
+     "Obawy o spowolnienie gospodarki zwykle szkodzą akcjom i ropie."),
+    (r"recession|recesj|slowdown|spowolni", "metals", "up", "Obawy o recesję zwykle zwiększają popyt na złoto."),
+    (r"tariffs?|\bcł[aoey]\b|trade war|wojn\w* handlow", "stocks oil crypto", "down",
+     "Cła zwiększają koszty i niepewność – zwykle szkodzą akcjom."),
+    (r"yields? (rise|rises|climb|jump|surge|higher|spike)|higher (bond )?yields|rentownoś\w* (rosną|rośnie)", "stocks metals crypto", "down",
+     "Rosnące rentowności obligacji przyciągają pieniądze – zwykle szkodzi akcjom i złotu."),
+    (r"yields? (fall|falls|drop|ease|decline|lower)|lower (bond )?yields|rentownoś\w* (spadają|spada)", "stocks metals crypto", "up",
+     "Spadające rentowności obligacji zwykle pomagają akcjom i złotu."),
+    (r"etfs? (bleed|outflows?)", "crypto", "down", "Odpływ pieniędzy z funduszy ETF oznacza sprzedających."),
+    (r"etf (inflows?|approval|approved)|napływ\w* do (funduszy|etf)", "crypto", "up",
+     "Napływ pieniędzy do funduszy ETF oznacza nowych kupujących."),
+    (r"etf outflows?|odpływ\w* z (funduszy|etf)", "crypto", "down", "Odpływ pieniędzy z funduszy ETF oznacza sprzedających."),
+    (r"\bhack|exploit|włamani|kradzież", "crypto", "down", "Włamania i kradzieże podważają zaufanie do kryptowalut."),
+    (r"record high|all-time high|rekordow\w* wysok|najwyżej w historii|historyczn\w* szczyt", "stocks metals crypto oil", "up",
+     "Cena na rekordach – trend jest silny, choć rośnie ryzyko chwilowej korekty."),
+]
+TONE_WHY = {"up": "W nagłówku przeważają pozytywne słowa (np. wzrost, zysk, odbicie).",
+            "down": "W nagłówku przeważają negatywne słowa (np. spadek, strata, obawy).",
+            "neutral": "Nagłówek nie wskazuje wyraźnie kierunku ceny."}
+
+def market_kind(symbol, group):
+    if symbol in ("GC=F", "SI=F", "PL=F", "PA=F", "HG=F"):
+        return "metals"
+    if symbol in ("CL=F", "BZ=F", "NG=F"):
+        return "oil"
+    return "crypto" if group == "Krypto" else "stocks"
+
+def interpret(text, kind):
+    for pat, kinds, d, why in NEWS_RULES:
+        if kind in kinds.split() and re.search(pat, text):
+            return d, why
+    t = tone(text)
+    d = "up" if t > 0.2 else "down" if t < -0.2 else "neutral"
+    return d, TONE_WHY[d]
+
+
+# ---------- potencjał: czy coś ma teraz największy potencjał ----------
+def potential(H, rc, setups, news_tone, soon_days, risk_lvl, p_hours, pats):
+    c, h, l, v = H["c"], H["h"], H["l"], H.get("v") or []
+    i = len(c) - 1
+    score, plus, minus = 42.0, [], []
+    s20, s50, rs, R = sma(c, i, 20), sma(c, i, 50), rsi(c, i), max(h[i - 20:i])
+    if c[i] > s50:
+        score += 8; plus.append("Trend średnioterminowy w górę (cena nad średnią z 50 dni).")
+    else:
+        score -= 8; minus.append("Cena pod średnią z 50 dni – trend średnioterminowy w dół.")
+    score += 6 if c[i] > s20 else -6
+    if s20 > s50 and c[i] > s20:
+        score += 4; plus.append("Krótki trend jest silniejszy od średniego – ruch w górę przyspiesza.")
+    if c[i] > R:
+        score += 10; plus.append(f"Wybicie: cena zamknęła się nad szczytem z 20 sesji ({fp(R)}).")
+    elif c[i] >= R * 0.98:
+        score += 4; plus.append(f"Cena tuż pod oporem {fp(R)} – możliwe wybicie.")
+    if 50 <= rs <= 70:
+        score += 6; plus.append(f"RSI {rs:.0f}: kupujący mają przewagę, rynek nie jest przegrzany.")
+    elif rs > 75:
+        score -= 8; minus.append(f"RSI {rs:.0f}: rynek przegrzany – łatwo o korektę.")
+    elif rs < 30:
+        score -= 2; minus.append(f"RSI {rs:.0f}: silne spadki – możliwe odbicie, ale to łapanie spadającego noża.")
+    if len(v) > 21 and v[i] and mean(v[i - 20:i]) > 0:
+        ratio = v[i] / mean(v[i - 20:i])
+        if ratio > 1.5 and c[i] > c[i - 1]:
+            score += 6; plus.append(f"Obrót {ratio:.1f}× większy niż zwykle przy wzroście – duże zainteresowanie kupujących.".replace(".", ",", 1))
+        elif ratio > 1.5 and c[i] < c[i - 1]:
+            score -= 6; minus.append(f"Obrót {ratio:.1f}× większy niż zwykle przy spadku – ktoś mocno sprzedaje.".replace(".", ",", 1))
+    if rc and i >= 21 and rc[i - 21]:
+        rel = (c[i] / c[i - 21] - 1) - (rc[i] / rc[i - 21] - 1)
+        if rel > 0.03:
+            score += 5; plus.append(f"W ostatnim miesiącu silniejszy od rynku o {rel * 100:.0f} pkt proc.")
+        elif rel < -0.05:
+            score -= 4; minus.append(f"W ostatnim miesiącu słabszy od rynku o {abs(rel) * 100:.0f} pkt proc.")
+    g, a = (setups or {}).get("good"), (setups or {}).get("all")
+    if g and a and c[i] > s50 and c[i] > s20:
+        edge = (g["up"] - a["up"]) * 100
+        score += max(-8, min(8, edge))
+        if edge > 3:
+            plus.append(f"Na tym instrumencie takie warunki w przeszłości działały: po tygodniu wyżej w {g['up'] * 100:.0f}% (zwykle {a['up'] * 100:.0f}%).")
+        elif edge < -3:
+            minus.append(f"Na tym instrumencie takie warunki w przeszłości nie działały ({g['up'] * 100:.0f}% vs zwykle {a['up'] * 100:.0f}%).")
+    if news_tone is not None and abs(news_tone) > 0.1:
+        score += news_tone * 10
+        (plus if news_tone > 0 else minus).append("Wiadomości z ostatnich dni są " + ("pozytywne." if news_tone > 0 else "negatywne."))
+    for pt in pats:
+        d = PATTERN_DIR.get(pt, "neutral")
+        if d != "neutral":
+            score += 4 if d == "up" else -4
+    if p_hours is not None:
+        score += 3 if p_hours > 55 else -3 if p_hours < 45 else 0
+    sd = st.stdev([c[k] / c[k - 1] - 1 for k in range(i - 59, i + 1)])
+    day = c[i] / c[i - 1] - 1
+    if sd and day > 3 * sd:
+        score -= 12; minus.append(f"Dziś już mocno urosło ({fpc(day)}, zwykle ±{pct1(sd)}) – kupowanie po takim skoku "
+                                  "to „gonienie ceny”; często lepiej poczekać na uspokojenie lub cofnięcie.")
+    elif sd and day < -3 * sd:
+        score -= 6; minus.append(f"Dziś gwałtowny spadek ({fpc(day)}) – poczekaj, aż sytuacja się wyjaśni.")
+    if soon_days is not None:
+        score -= 12; minus.append(f"Wyniki spółki {('dziś' if soon_days == 0 else 'jutro' if soon_days == 1 else f'za {soon_days} dni')} – cena może nagle skoczyć w dowolną stronę.")
+    if risk_lvl >= 4:
+        score -= 15; minus.append("Bardzo wysoka zmienność – łatwo o dużą stratę, nie dla początkujących.")
+    elif risk_lvl == 3:
+        score -= 5
+    return round(max(0, min(100, score))), plus, minus
+
+def vol_level(ann): return 1 if ann < 0.15 else 2 if ann < 0.35 else 3 if ann < 0.60 else 4
+RISK_LABEL = ["Niskie", "Umiarkowane", "Wysokie", "Bardzo wysokie"]
+
+
+# ---------- skaner rynku (spoza listy) ----------
+UNIVERSE = ["PKN.WA", "PKO.WA", "PZU.WA", "PEO.WA", "KGH.WA", "CDR.WA", "LPP.WA", "DNP.WA", "ALE.WA", "SPL.WA",
+            "MBK.WA", "CPS.WA", "OPL.WA", "PGE.WA", "TPE.WA", "JSW.WA", "KTY.WA", "KRU.WA", "ALR.WA", "BDX.WA",
+            "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "JPM", "V", "LLY", "XOM", "WMT",
+            "AMD", "NFLX", "COST", "ORCL", "PLTR", "INTC", "BA", "DIS", "KO", "UNH", "MU", "CRM",
+            "GC=F", "SI=F", "CL=F", "BZ=F", "NG=F", "HG=F", "PL=F",
+            "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD", "^GSPC", "^NDX", "^GDAXI"]
+
+def group_of(sym, typ=""):
+    if sym.endswith(".WA"): return "Akcje GPW"
+    if sym.endswith("=F"): return "Surowce"
+    if sym.endswith("-USD") or typ == "CRYPTOCURRENCY": return "Krypto"
+    if sym.startswith("^") or typ == "INDEX": return "Indeksy"
+    if typ == "ETF": return "ETF"
+    return "Akcje USA" if "." not in sym else "Akcje – świat"
+
+def ref_for(sym, group):
+    if group == "Akcje GPW": return "ETFBW20TR.WA"
+    if group == "Krypto": return "^IXIC"
+    if sym in ("GC=F", "SI=F", "PL=F", "HG=F"): return "DX-Y.NYB"
+    return "^GSPC" if sym != "^GSPC" else "^VIX"
+
+def market_movers():
+    syms = []
+    for url in ("https://query1.finance.yahoo.com/v1/finance/trending/US?count=20",
+                "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_gainers&count=15",
+                "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=most_actives&count=15"):
+        try:
+            for q in get_json(url)["finance"]["result"][0]["quotes"]:
+                if q.get("marketCap", 1e12) >= 2e9 and q.get("regularMarketPrice", 10) >= 5:
+                    syms.append(q["symbol"])
+        except Exception as e:
+            print("Lista popularnych pominięta:", e)
+    return syms
+
+def scan(prev_scan, own):
+    if prev_scan and NOW.minute >= 15 and dt.datetime.fromisoformat(prev_scan["time"]) > NOW - dt.timedelta(hours=2):
+        return prev_scan  # skaner działa raz na godzinę
+    syms = list(dict.fromkeys(UNIVERSE + market_movers()))
+    out = []
+    for sym in syms:
+        try:
+            H = history(sym, "2y")
+            c, n = H["c"], len(H["c"])
+            if n < 150 or c[-1] <= 0:
+                continue
+            group = group_of(sym, H["type"])
+            if group in ("Akcje USA", "Akcje – świat") and mean([a * b for a, b in zip(c[-20:], H["v"][-20:])]) < 5e6:
+                continue
+            rs_ = ref_for(sym, group)
+            rc = align(H["d"], history(rs_, "2y")) if rs_ else None
+            S = {"d": H["d"], "c": c, "h": H["h"], "l": H["l"], "r": rets(c), "rc": rc, "rr": rets(rc) if rc else None}
+            crypto = group == "Krypto"
+            sd = st.stdev(S["r"][-60:]); ann = sd * math.sqrt(365 if crypto else 252)
+            setups = setup_history(S, 7 if crypto else 5)
+            pats = patterns_at(H["o"], H["h"], H["l"], c, n - 1) + patterns_at(H["o"], H["h"], H["l"], c, n - 2)
+            score, plus, minus = potential(H, rc, setups, None, None, vol_level(ann), None, pats)
+            a = atr(H["h"], H["l"], c, n - 1)
+            out.append({"symbol": sym, "name": H["name"], "group": group, "currency": H["cur"], "price": c[-1],
+                        "change": (c[-1] / c[-2] - 1) * 100, "score": score, "plus": plus, "minus": minus,
+                        "risk": vol_level(ann), "risk_label": RISK_LABEL[vol_level(ann) - 1], "ann": ann,
+                        "stop": c[-1] - 2 * a, "target": c[-1] + 3 * a, "own": sym in own, "pats": pats,
+                        "spark": [float(f"{x:.6g}") for x in c[-30:]]})
+        except Exception as e:
+            print("Skaner pominął", sym, e)
+    out.sort(key=lambda x: -x["score"])
+    for x in out[:10]:  # dla najciekawszych: newsy i daty wyników
+        kind = market_kind(x["symbol"], x["group"])
+        try:
+            q = x["name"].split(",")[0].replace(" Inc.", "").replace(" Corporation", "")
+            news = [n for n in google(q + (" stock" if kind == "stocks" else ""), "en") if n["date"] and
+                    (NOW - n["date"]).days <= 4][:30]
+            for n in news:
+                n["tier"] = tier_of(n["source"])
+            news.sort(key=lambda n: (n["tier"], NOW - n["date"]))
+            x["news"] = []
+            for n in news[:3]:
+                d_, why = interpret(n["title"].lower(), kind)
+                x["news"].append({"title": n["title"], "link": n["link"], "source": n["source"], "tier": n["tier"],
+                                  "date": n["date"].isoformat(), "dir": d_, "why": why})
+            tn = [tone(n["title"].lower()) for n in news[:15]]
+            if tn:
+                adj = mean(tn) * 10
+                x["score"] = round(max(0, min(100, x["score"] + adj)))
+                if abs(adj) > 1:
+                    (x["plus"] if adj > 0 else x["minus"]).append(
+                        "Wiadomości z ostatnich dni są " + ("pozytywne." if adj > 0 else "negatywne."))
+        except Exception as e:
+            print("Newsy skanera pominięte:", x["symbol"], e)
+        if x["group"] == "Akcje USA":
+            try:
+                ev = nasdaq_earnings({"symbol": x["symbol"], "name": x["name"]})
+                if ev:
+                    days = (dt.date.fromisoformat(ev[0]["date"]) - TODAY_PL).days
+                    x["earnings_days"] = days
+                    if 0 <= days <= 3:
+                        x["score"] = max(0, x["score"] - 12)
+                        x["minus"].append(f"Wyniki spółki za {days} dni – ryzyko nagłego skoku ceny.")
+            except Exception:
+                pass
+    out.sort(key=lambda x: -x["score"])
+    return {"time": NOW.isoformat(), "items": out}
+
+
+# ---------- najważniejsze wiadomości ze świata ----------
+WORLD_Q = [("stock market today", "en", "stocks"), ("Federal Reserve interest rates", "en", "stocks"),
+           ("oil prices", "en", "oil"), ("gold prices", "en", "metals"), ("bitcoin price", "en", "crypto"),
+           ("giełda GPW WIG20", "pl", "stocks")]
+
+def world_news(prev_world, instruments):
+    if prev_world and NOW.minute >= 15 and dt.datetime.fromisoformat(prev_world["time"]) > NOW - dt.timedelta(hours=2):
+        return prev_world
+    seen, out = set(), []
+    for q, lang, kind in WORLD_Q:
+        try:
+            for n in google(q, lang):
+                if not n["date"] or (NOW - n["date"]).total_seconds() > 2 * 86400:
+                    continue
+                t = tier_of(n["source"])
+                key = re.sub(r"\W+", "", n["title"].lower())[:50]
+                if t > 1 or key in seen:
+                    continue
+                seen.add(key)
+                text = n["title"].lower()
+                d_, why = interpret(text, kind)
+                hits = [i["name"] for i in instruments if any(k in text for k in i["keywords"])]
+                out.append({"title": n["title"], "link": n["link"], "source": n["source"], "tier": t, "lang": lang,
+                            "date": n["date"].isoformat(), "dir": d_, "why": why, "kind": kind, "names": hits[:4]})
+        except Exception as e:
+            print("Wiadomości ze świata pominięte:", q, e)
+    out.sort(key=lambda x: x["date"], reverse=True)
+    return {"time": NOW.isoformat(), "items": out[:14]}
+
+
+# ---------- zmiany od ostatniej aktualizacji ----------
+def detect_changes(items, prev):
+    old = {i["symbol"]: i for i in (prev or {}).get("items", [])}
+    keep = [c for c in (prev or {}).get("changes", [])
+            if dt.datetime.fromisoformat(c["time"]) > NOW - dt.timedelta(days=3)]
+    keys = {(c["symbol"], c["kind"], c["time"][:10]) for c in keep}
+    new = []
+    def add(it, kind, d, text):
+        k = (it["symbol"], kind, NOW.isoformat()[:10])
+        if k not in keys:
+            keys.add(k)
+            new.append({"symbol": it["symbol"], "name": it["name"], "kind": kind, "dir": d, "text": text,
+                        "time": NOW.isoformat()})
+    rank = {"no": 0, "wait": 1, "go": 2}
+    for it in items:
+        p = old.get(it["symbol"])
+        if not p or "decision" not in p:
+            continue
+        a, b = p["decision"]["key"], it["decision"]["key"]
+        if a != b:
+            up_ = rank[b] > rank[a]
+            add(it, "decision", "up" if up_ else "down",
+                f"Ocena zmieniła się: „{p['decision']['title']}” → „{it['decision']['title']}”."
+                + ("" if up_ else " Jeśli planowałeś wejście – wstrzymaj się."))
+        R, S_ = p["levels"]["R"], p["levels"]["S"]
+        if p["price"] <= R < it["price"]:
+            add(it, "breakout", "up", f"Wybicie w górę: cena {fp(it['price'])} przebiła opór {fp(R)}.")
+        if p["price"] >= S_ > it["price"]:
+            add(it, "breakdown", "down", f"Cena {fp(it['price'])} spadła poniżej wsparcia {fp(S_)} – sygnał ostrzegawczy.")
+        sd = it["levels"]["sd60"]
+        if sd and abs(it["change"]) / 100 > 2.5 * sd:
+            add(it, "move", "up" if it["change"] > 0 else "down",
+                f"Nietypowo duży ruch dziś: {fpc(it['change'] / 100)} (zwykle ±{pct1(sd)}).")
+    return (new + keep)[:40], new
+
+
 # ---------- analiza jednego instrumentu ----------
 def analyze(ins, bankier, cal, vix):
     H = history(ins["symbol"])
@@ -748,6 +1212,17 @@ def analyze(ins, bankier, cal, vix):
         intra = intraday(ins["symbol"])
     except Exception as e:
         print("Brak danych z dzisiejszej sesji:", ins["symbol"], e)
+    hours = None
+    try:
+        hours = hourly_chance(ins["symbol"])
+    except Exception as e:
+        print("Brak danych godzinowych:", ins["symbol"], e)
+    pats, pstats, pbase = candle_patterns(H)
+    last_pats = [x["key"] for x in pats if x["i"] >= 258]  # formacje z 2 ostatnich świec
+    earn = next((e["days"] for e in my_events if e["kind"] == "wyniki" and 0 <= e["days"] <= 3), None)
+    pot, plus, minus = potential(H, S["rc"], setups, week["tone"] if week["count"] else None, earn, risk["level"],
+                                 hours["p"] if hours else None, last_pats)
+    K = 260
 
     t0 = days[0].toordinal()
     return {"symbol": ins["symbol"], "name": ins["name"], "group": ins["group"], "currency": H["cur"],
@@ -765,7 +1240,12 @@ def analyze(ins, bankier, cal, vix):
             "news": {"week": week, "prev": prev},
             "cfd": {"lev": ins.get("lev", 5), "spread": ins.get("spread", 0.1), "lot": ins.get("lot"),
                     "unit": ins.get("unit", "szt.")},
-            "intra": intra,
+            "intra": intra, "hours": hours,
+            "potential": {"score": pot, "plus": plus, "minus": minus},
+            "ohlc": {"o": [float(f"{x:.6g}") for x in H["o"][-K:]], "h": [float(f"{x:.6g}") for x in H["h"][-K:]],
+                     "l": [float(f"{x:.6g}") for x in H["l"][-K:]], "c": [float(f"{x:.6g}") for x in c[-K:]],
+                     "dd": [d.toordinal() - t0 for d in days[-K:]]},
+            "patterns": pats, "pattern_stats": pstats, "pattern_base": pbase,
             "hist": {"t0": t0, "dd": [d.toordinal() - t0 for d in days], "c": [float(f"{x:.6g}") for x in c]}}
 
 
@@ -791,33 +1271,20 @@ def pulse():
     return out
 
 
-def notify(items, prev):
+def notify(items, new_changes):
     """Powiadomienia na telefon (aplikacja ntfy), jeśli w GitHubie ustawiono sekret NTFY_TOPIC."""
     topic = os.environ.get("NTFY_TOPIC")
-    if not topic or not prev:
+    if not topic or not new_changes:
         return
-    old = {i["symbol"]: i for i in prev.get("items", [])}
-    for it in items:
-        p = old.get(it["symbol"])
-        if not p or "decision" not in p:
-            continue
-        msgs = []
-        if p["decision"]["key"] != it["decision"]["key"]:
-            msgs.append(f"Nowa ocena: {it['decision']['title']} (było: {p['decision']['title']}).")
-        R, S_ = p["levels"]["R"], p["levels"]["S"]
-        if p["price"] <= R < it["price"]:
-            msgs.append(f"Wybicie w górę: cena {fp(it['price'])} przebiła opór {fp(R)}.")
-        if p["price"] >= S_ > it["price"]:
-            msgs.append(f"Uwaga: cena {fp(it['price'])} spadła poniżej wsparcia {fp(S_)}.")
-        if msgs:
-            body = json.dumps({"topic": topic, "title": f"{it['name']} – Centrum rynku", "message": " ".join(msgs),
-                               "click": SITE + "#i=" + urllib.parse.quote(it["symbol"])}).encode()
-            try:
-                urllib.request.urlopen(urllib.request.Request("https://ntfy.sh/", data=body,
-                                                              headers={"Content-Type": "application/json"}), timeout=15)
-                print("Wysłano powiadomienie:", it["symbol"])
-            except Exception as e:
-                print("Powiadomienie nieudane:", e)
+    for ch in new_changes:
+        body = json.dumps({"topic": topic, "title": f"{ch['name']} – Centrum rynku", "message": ch["text"],
+                           "tags": ["chart_with_upwards_trend" if ch["dir"] == "up" else "warning"],
+                           "click": SITE + "#i=" + urllib.parse.quote(ch["symbol"])}).encode()
+        try:
+            urllib.request.urlopen(urllib.request.Request("https://ntfy.sh/", data=body,
+                                                          headers={"Content-Type": "application/json"}), timeout=15)
+        except Exception as e:
+            print("Powiadomienie nieudane:", e)
 
 
 if __name__ == "__main__":
@@ -852,8 +1319,12 @@ if __name__ == "__main__":
     names = {i["symbol"]: i["name"] for i in instruments}
     for e in cal:
         e["names"] = [names[s] for s in e["symbols"] if s in names]
-    notify(items, prev)
+    changes, new_changes = detect_changes(items, prev)
+    sc = scan((prev or {}).get("scan"), {i["symbol"] for i in instruments})
+    world = world_news((prev or {}).get("world"), instruments)
+    notify(items, new_changes)
     with open("data.json", "w", encoding="utf-8") as f:
-        json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items},
+        json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items,
+                   "changes": changes, "scan": sc, "world": world},
                   f, ensure_ascii=False, separators=(",", ":"))
     print("Zapisano", len(items), "instrumentów,", len(cal), "wydarzeń w kalendarzu")

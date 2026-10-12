@@ -6,7 +6,7 @@ const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.
  set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 const DEF_FAV=["TPE.WA","CDR.WA","BTC-USD","SI=F","GC=F","AAPL"];
 let D=null,fav=store.get("fav",DEF_FAV),listTab="fav",range=store.get("range2","3M"),ntab="week";
-let calScope="fav",calType="all",jMode="paper";
+let calScope="fav",calType="all",jMode="paper",chartMode=store.get("chartMode","cnd"),selCandle=null;
 let settings=Object.assign({capital:10000,risk:1,mode:"cfd",comm:0,swap:7,days:1},store.get("settings",{}));
 let journal=store.get("journal",[]);
 const saveSettings=()=>store.set("settings",settings),saveJournal=()=>store.set("journal",journal);
@@ -76,8 +76,12 @@ function viewRynki(){
  <div class="status">${k}</div>
  <div class="pulse" aria-label="Puls rynku">${(D.pulse||[]).map(p=>`<div class="pc"><b>${esc(p.name)}</b><strong>${fmt(p.price)}</strong><span class="${sgn(p.change)}">${pct(p.change,2)}</span><small>${esc(p.note)}</small></div>`).join("")}</div>
  <div class="ctl"><div class="seg" role="group" aria-label="Lista"><button data-list="fav" aria-pressed="${listTab==="fav"}">Ulubione</button><button data-list="all" aria-pressed="${listTab==="all"}">Wszystkie</button></div>
- <input id="q" type="search" placeholder="Szukaj instrumentu" aria-label="Szukaj instrumentu"></div>
- <div id="out" class="grid"></div>`;
+ <input id="q" type="search" placeholder="Szukaj na liście" aria-label="Szukaj na liście"></div>
+ <div id="out" class="grid"></div>
+ <section class="box" style="margin-top:16px"><h3>Dodaj dowolny instrument</h3>
+ <p class="note" style="margin-top:-4px">Wpisz nazwę lub symbol – akcję z dowolnej giełdy, kryptowalutę, surowiec albo indeks (np. Sony, KGHM, Ethereum, platyna). Otworzy się GitHub: kliknij tam zielony przycisk „Create”. Po 2–3 minutach instrument pojawi się na liście z pełną analizą. Usunąć go możesz w jego widoku (zakładka Decyzja, na dole).</p>
+ <div class="ctl" style="margin:0"><input id="addQ" placeholder="np. Sony albo KGH.WA" aria-label="Nazwa lub symbol do dodania"><button class="btn pri" id="addBtn">Dodaj</button></div><div id="pend">${pendingHtml()}</div></section>`;
+ $("addQ").addEventListener("keydown",e=>{if(e.key==="Enter")$("addBtn").click()});
  $("q").oninput=renderList;renderList()}
 function renderList(){const q=($("q")?.value||"").toLowerCase();
  const list=D.items.filter(i=>(listTab==="all"||fav.includes(i.symbol))&&(i.name+i.symbol+i.group).toLowerCase().includes(q));
@@ -100,7 +104,8 @@ function tDecyzja(it){const d=it.decision,pl=it.plan,r=it.risk;
  const ev=eventsFor(it.symbol).filter(e=>e.days<=7&&e.impact!=="low");
  const extra=r.why.slice(1);
  $("tab").innerHTML=`<div class="hero bg-${d.key}"><h3 class="${DEC[d.key]}">${esc(d.title)}</h3><ul>${d.reasons.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>
- <div class="stats3">
+ <div class="stats4">
+  <div class="stat"><b>Szansa wzrostu w ciągu ~4 godzin</b><strong class="${p50(it.hours&&it.hours.p)}">${it.hours?fmt(it.hours.p,0)+"%":"–"}</strong></div>
   <div class="stat"><b>Szansa wzrostu jutro</b><strong class="${p50(it.overall)}">${fmt(it.overall,0)}%</strong></div>
   <div class="stat"><b>Szansa wzrostu w tydzień</b><strong class="${p50(it.p_week)}">${it.p_week==null?"–":fmt(it.p_week,0)+"%"}</strong></div>
   <div class="stat"><b>Ryzyko</b><strong class="r${r.level}">${esc(r.label)}</strong></div></div>
@@ -110,7 +115,8 @@ function tDecyzja(it){const d=it.decision,pl=it.plan,r=it.risk;
   <ul class="clean checks" aria-label="Warunki wzrostu">${pl.checks.map(c=>`<li><span class="ic ${c.ok?"up":"down"}">${c.ok?"✓":"✗"}</span><span>${esc(c.text)}</span></li>`).join("")}</ul>
   <div class="row" style="margin-top:14px"><button class="btn pri" data-tab="kalkulator">Oblicz bezpieczną wielkość pozycji →</button></div></section>
  <section class="box"><h3>Podsumowanie w prostych słowach</h3><ul class="sum">${it.summary.map(s=>`<li>${esc(s)}</li>`).join("")}</ul></section>
- <p class="note">„Szansa wzrostu” jest skalibrowana na historii: pokazuje tyle, ile podobne odczyty naprawdę znaczyły w przeszłości. Dlatego zwykle jest blisko 50% – przewidywanie jednego dnia jest bardzo trudne. Ocena „Możesz rozważyć wejście” opiera się na warunkach trendu, ryzyku i kalendarzu.</p>`}
+ <p class="note">„Szansa wzrostu” jest liczona z historii: pokazuje tyle, ile podobne odczyty naprawdę znaczyły w przeszłości. Dlatego zwykle jest blisko 50% – przewidywanie jednego dnia jest bardzo trudne. Ocena „Możesz rozważyć wejście” opiera się na warunkach trendu, ryzyku i kalendarzu.</p>
+ <p style="margin-top:18px"><button class="btn sm" data-remove>Usuń ${esc(it.name)} z listy</button></p>`}
 
 // --- wykres ---
 const RANGES=[["1D","Dziś",0],["1T","Tydzień",7],["1M","Miesiąc",30],["3M","3 mies.",91],["6M","6 mies.",182],["1R","Rok",365],["5L","5 lat",1e5]];
@@ -128,8 +134,12 @@ function tWykres(it){const L=it.levels,P=it.perf,h100=x=>x==null?null:x*100,tvt=
   ["Roczny szczyt / dołek",`${fmt(L.hi52)} / ${fmt(L.lo52)}`,""]]
   .map(([k,v,h])=>`<dt>${k}</dt><dd>${v}</dd>${h?`<small>${h}</small>`:""}`).join("");
  $("tab").innerHTML=`<section class="box"><div class="seg" role="group" aria-label="Okres wykresu" style="margin-bottom:10px">${RANGES.filter(r=>r[0]!=="1D"||it.intra).map(r=>`<button data-r="${r[0]}" aria-pressed="${r[0]===range}">${r[1]}</button>`).join("")}</div>
-  <div class="small mut" id="rch" style="margin-bottom:6px"></div><div class="chartwrap" id="cw"></div>
-  <div class="legend" id="lg"><span><i></i>opór ${fmt(L.R)} i wsparcie ${fmt(L.S)} – szczyt i dołek z ostatnich 20 sesji</span></div></section>
+  <div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="small mut" id="rch"></div>
+  <div class="seg" role="group" aria-label="Rodzaj wykresu"><button data-cm="line" aria-pressed="${chartMode==="line"}">Linia</button><button data-cm="cnd" aria-pressed="${chartMode==="cnd"}">Świece</button></div></div>
+  <div class="chartwrap" id="cw"></div>
+  <div class="legend" id="lg"><span><i></i>opór ${fmt(L.R)} i wsparcie ${fmt(L.S)} – szczyt i dołek z ostatnich 20 sesji</span></div>
+  <div id="cinfo"></div></section>
+ <section class="box" id="patbox"></section>
  <div class="two"><section class="box"><h3>Teraz – zmiany ceny</h3><div class="tiles">${tiles}</div></section>
  <section class="box"><h3>Ważne poziomy</h3><dl class="kv">${kv}</dl></section></div>`}
 function series(it){
@@ -138,6 +148,7 @@ function series(it){
  for(let i=0;i<H.dd.length;i++)if(H.dd[i]<=last-R[2])s=i;
  const xs=H.dd.slice(s).map(o=>dayDate(H.t0+o).getTime()),ys=H.c.slice(s);return {xs,ys,base:ys[0],long:R[2]>182}}
 function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.intra)range="1M";
+ if(chartMode==="cnd"&&range!=="5L")return drawCandles(it);
  const S=series(it),w=wrap.clientWidth||600,h=w<500?220:280,pl=6,pr=62,pt=10,pb=24,iw=w-pl-pr,ih=h-pt-pb;
  const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range);
  let mn=Math.min(...S.ys,S.intra?S.base:Infinity),mx=Math.max(...S.ys,S.intra?S.base:-Infinity);if(showLv){mn=Math.min(mn,L.S);mx=Math.max(mx,L.R)}
@@ -168,6 +179,57 @@ function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.i
   tip.style.display="block";const tw=tip.offsetWidth;tip.style.left=Math.min(Math.max(px-tw/2,0),w-tw)+"px";tip.style.top=Math.max(py-58,0)+"px"};
  hit.addEventListener("pointermove",move);hit.addEventListener("pointerdown",move);
  hit.addEventListener("pointerleave",()=>{hov.style.display="none";tip.style.display="none"})}
+
+function candleData(it){
+ if(range==="1D"&&it.intra&&it.intra.cnd){const C=it.intra.cnd;return {t:C.t.map(x=>x*1000),o:C.o,h:C.h,l:C.l,c:C.c,intra:true,pats:[]}}
+ const O=it.ohlc,R=RANGES.find(r=>r[0]===range)||RANGES[3],last=O.dd[O.dd.length-1];let s=0;
+ for(let i=0;i<O.dd.length;i++)if(O.dd[i]<=last-R[2])s=i;if(range==="1T")s=Math.max(0,O.dd.length-6);
+ const pats=(it.patterns||[]).filter(p=>p.i>=s).map(p=>({i:p.i-s,key:p.key}));
+ return {t:O.dd.slice(s).map(o=>dayDate(it.hist.t0+o).getTime()),o:O.o.slice(s),h:O.h.slice(s),l:O.l.slice(s),c:O.c.slice(s),intra:false,pats,long:R[2]>182}}
+function drawCandles(it){const wrap=$("cw"),S=candleData(it),n=S.c.length,w=wrap.clientWidth||600,h=w<500?240:300,pl=6,pr=62,pt=14,pb=24,iw=w-pl-pr,ih=h-pt-pb;
+ const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range);
+ let mn=Math.min(...S.l),mx=Math.max(...S.h);if(showLv){mn=Math.min(mn,L.S);mx=Math.max(mx,L.R)}const pad=(mx-mn)*0.08||1;mn-=pad;mx+=pad;
+ const step=iw/n,X=i=>pl+(i+0.5)*step,Y=v=>pt+(1-(v-mn)/(mx-mn))*ih,bw=Math.max(1.5,Math.min(14,step*0.7));
+ if(selCandle==null||selCandle>=n)selCandle=n-1;
+ let grid="";for(let k=0;k<=4;k++){const v=mn+(mx-mn)/4*k,y=Y(v);grid+=`<line x1="${pl}" x2="${pl+iw}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${pl+iw+6}" y="${y+4}" fill="var(--dim)" font-size="11">${fmt(v)}</text>`}
+ const lv=showLv?[L.R,L.S].map(v=>`<line x1="${pl}" x2="${pl+iw}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--mut)" stroke-dasharray="5 4" stroke-width="1.2"/>`).join(""):"";
+ let body="";for(let i=0;i<n;i++){const up=S.c[i]>=S.o[i],col=up?"var(--up)":"var(--down)",x=X(i),y1=Y(Math.max(S.o[i],S.c[i])),y2=Y(Math.min(S.o[i],S.c[i]));
+  body+=`<line x1="${x}" x2="${x}" y1="${Y(S.h[i])}" y2="${Y(S.l[i])}" stroke="${col}" stroke-width="1"/><rect x="${x-bw/2}" y="${y1}" width="${bw}" height="${Math.max(1,y2-y1)}" fill="${col}" rx="1"/>`}
+ const byI={};S.pats.forEach(p=>(byI[p.i]=byI[p.i]||[]).push(p.key));
+ let marks="";Object.entries(byI).forEach(([i,keys])=>{i=+i;const d=keys.map(k=>PAT[k].d),dir=d.includes("up")&&!d.includes("down")?"up":d.includes("down")&&!d.includes("up")?"down":"neutral",x=X(i);
+  marks+=dir==="up"?`<path d="M${x} ${Y(S.l[i])+6}l-4 7h8z" fill="var(--up)"/>`:dir==="down"?`<path d="M${x} ${Y(S.h[i])-6}l-4 -7h8z" fill="var(--down)"/>`:`<circle cx="${x}" cy="${Y(S.h[i])-8}" r="2.5" fill="var(--mid)"/>`});
+ const lab=i=>S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),S.long);
+ const xl=[0,Math.floor((n-1)/2),n-1].map((i,j)=>`<text x="${X(i)}" y="${h-6}" fill="var(--dim)" font-size="11" text-anchor="${["start","middle","end"][j]}">${lab(i)}</text>`).join("");
+ wrap.innerHTML=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Wykres świecowy ${esc(it.name)}">${grid}${lv}${body}${marks}
+  <rect id="csel" x="${X(selCandle)-step/2}" y="${pt}" width="${step}" height="${ih}" fill="var(--ink)" opacity=".07"/>${xl}
+  <rect x="${pl}" y="${pt}" width="${iw}" height="${ih}" fill="transparent" id="hit"/></svg><div class="tip" id="tip"></div>`;
+ const ch=(S.c[n-1]/(S.intra&&it.intra.prev?it.intra.prev:S.o[0])-1)*100;
+ $("rch").innerHTML=`${S.intra?"Świece 15-minutowe · zmiana od wczoraj":"Świece dzienne · zmiana w okresie"}: <b class="${sgn(ch)}">${pct(ch)}</b>`;
+ $("lg").style.display=showLv?"":"none";
+ const hit=$("hit"),tip=$("tip"),idx=e=>Math.max(0,Math.min(n-1,Math.floor((e.clientX-hit.getBoundingClientRect().left)/step)));
+ hit.addEventListener("pointermove",e=>{const i=idx(e),x=X(i);tip.innerHTML=`${S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),true)}<br>O ${fmt(S.o[i])} · H ${fmt(S.h[i])}<br>L ${fmt(S.l[i])} · C <b>${fmt(S.c[i])}</b>`;
+  tip.style.display="block";const tw=tip.offsetWidth;tip.style.left=Math.min(Math.max(x-tw/2,0),w-tw)+"px";tip.style.top="0px"});
+ hit.addEventListener("pointerleave",()=>tip.style.display="none");
+ hit.addEventListener("click",e=>{selCandle=idx(e);$("csel").setAttribute("x",X(selCandle)-step/2);candleInfo(it,S,selCandle)});
+ candleInfo(it,S,selCandle);patternList(it,S)}
+function patInfo(it,key){const P=PAT[key],st=(it.pattern_stats||{})[key],b=it.pattern_base;
+ return `<div class="pat"><b class="${DIRCLS[P.d]}">${P.n}</b> <span class="chip">${P.d==="up"?"sygnał wzrostowy":P.d==="down"?"sygnał spadkowy":"niezdecydowanie"}</span>
+ <p><b>Jak wygląda:</b> ${P.what}</p><p><b>Co oznacza:</b> ${P.mean}</p><p><b>Dlaczego tak się dzieje:</b> ${P.why}</p>
+ ${st?`<p class="note">Na tym instrumencie (5 lat): po tej formacji cena po 3 sesjach była wyżej w <b class="${st.up*100>b*100+3?"up":st.up*100<b*100-3?"down":"flat"}">${fmt(st.up*100,0)}%</b> przypadków (${st.n} razy; zwykle ${fmt(b*100,0)}%). ${Math.abs(st.up-b)<0.03?"Czyli tutaj nie daje wyraźnej przewagi.":st.up>b?"Tutaj zwykle działała na plus.":"Tutaj częściej poprzedzała spadki."}</p>`:""}</div>`}
+function candleInfo(it,S,i){const el=$("cinfo");if(!el)return;const keys=S.pats.filter(p=>p.i===i).map(p=>p.key);
+ el.innerHTML=`<div class="cbox"><p class="small" style="margin:0 0 6px"><b>Wybrana świeca: ${S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),true)}</b> · otwarcie ${fmt(S.o[i])}, najwyżej ${fmt(S.h[i])}, najniżej ${fmt(S.l[i])}, zamknięcie ${fmt(S.c[i])}</p>
+ <p class="small" style="margin:0">${candleDesc(S.o[i],S.h[i],S.l[i],S.c[i])}</p>${keys.map(k=>patInfo(it,k)).join("")}
+ <p class="note" style="margin:8px 0 0">Kliknij dowolną świecę, żeby zobaczyć jej opis. Trójkąt pod świecą = formacja wzrostowa, nad świecą = spadkowa, kropka = niezdecydowanie.</p></div>`}
+function patternList(it,S){const el=$("patbox");if(!el)return;
+ if(S.intra){el.innerHTML=`<h3>Jak czytać świece</h3>${howTo()}`;return}
+ const rec=S.pats.filter(p=>p.i>=S.c.length-20).reverse();
+ el.innerHTML=`<h3>Formacje świecowe z ostatnich 20 sesji</h3>${rec.length?`<ul class="clean nlist">${rec.map(p=>`<li><span class="dotc" style="background:var(--${PAT[p.key].d==="up"?"up":PAT[p.key].d==="down"?"down":"mid"})"></span><span><button class="linkbtn" data-cpick="${p.i}">${PAT[p.key].n}</button> – ${dlabel(new Date(S.t[p.i]),false)}<span class="nmeta">${PAT[p.key].mean}</span></span></li>`).join("")}</ul>`:`<p class="note">Brak wyraźnych formacji w ostatnich 20 sesjach.</p>`}
+ <details style="margin-top:10px"><summary class="small"><b>Jak czytać świece – krótka lekcja</b></summary>${howTo()}</details>`}
+function howTo(){return `<div class="howto"><svg viewBox="0 0 150 120" width="150" height="120" aria-hidden="true"><line x1="40" x2="40" y1="8" y2="112" stroke="var(--up)" stroke-width="2"/><rect x="28" y="30" width="24" height="55" fill="var(--up)" rx="2"/><line x1="110" x2="110" y1="8" y2="112" stroke="var(--down)" stroke-width="2"/><rect x="98" y="30" width="24" height="55" fill="var(--down)" rx="2"/>
+ <text x="56" y="14" fill="var(--mut)" font-size="9">najwyżej</text><text x="56" y="112" fill="var(--mut)" font-size="9">najniżej</text><text x="56" y="34" fill="var(--mut)" font-size="9">zamkn.</text><text x="56" y="86" fill="var(--mut)" font-size="9">otwarcie</text></svg>
+ <ul class="sum small"><li>Każda świeca to jedna sesja (lub 15 minut na wykresie „Dziś”).</li><li><b>Korpus</b> (gruba część) – od ceny otwarcia do zamknięcia. <span class="up">Zielony</span>: zamknięcie wyżej niż otwarcie. <span class="down">Czerwony</span>: niżej.</li>
+ <li><b>Cienie</b> (cienkie kreski) – najwyższa i najniższa cena w trakcie sesji. Długi cień pokazuje, że cena tam była, ale ją odepchnięto.</li><li>Pojedyncza świeca mówi niewiele – liczy się miejsce, w którym się pojawia (po wzrostach czy po spadkach) i potwierdzenie następnego dnia.</li>
+ <li>Strona sama wyszukuje typowe formacje i pokazuje, jak działały na danym instrumencie w ostatnich 5 latach.</li></ul></div>`}
 
 // --- kalkulator ryzyka ---
 const calcState={};
@@ -285,9 +347,14 @@ function tPrognoza(it){const F=it.forecast,bt=it.bt,S=it.setups;
  const meth=it.methods.map(m=>`<div class="mrow"><div class="mtop"><span><i class="sw" style="background:${MCOL[m.key]}"></i>${esc(m.name)}</span><em class="${p50(m.p)}">${m.p==null?"–":fmt(m.p,0)+"%"}</em></div>
   ${bar(m.p,MCOL[m.key])}<small>${esc(m.note)}${m.acc!=null?` · trafność w ostatnim roku: <b class="${m.acc>=52?"up":m.acc<48?"down":"flat"}">${fmt(m.acc,0)}%</b> · waga ×${fmt(m.w,1)}`:" · nie testowana na historii"}</small>
   <details><summary>Co to znaczy?</summary>${MINFO[m.key]}</details></div>`).join("");
- $("tab").innerHTML=`<div class="stats3"><div class="stat"><b>Szansa wzrostu jutro</b><strong class="${p50(it.overall)}">${fmt(it.overall,0)}%</strong></div>
+ const Hh=it.hours,Pp=it.potential;
+ $("tab").innerHTML=`<div class="stats4"><div class="stat"><b>W ciągu ~4 godzin</b><strong class="${p50(Hh&&Hh.p)}">${Hh?fmt(Hh.p,0)+"%":"–"}</strong></div><div class="stat"><b>Szansa wzrostu jutro</b><strong class="${p50(it.overall)}">${fmt(it.overall,0)}%</strong></div>
   <div class="stat"><b>W ciągu tygodnia</b><strong class="${p50(it.p_week)}">${it.p_week==null?"–":fmt(it.p_week,0)+"%"}</strong></div>
   <div class="stat"><b>Trafność w roku</b><strong>${bt.overall==null?"–":fmt(bt.overall,0)+"%"}</strong></div></div>
+ <section class="box"><h3>Potencjał teraz: <span class="${Pp.score>=70?"up":Pp.score<=35?"down":"midc"}">${Pp.score}/100</span></h3>
+  ${Pp.plus.length?`<p class="small" style="margin:0 0 4px"><b>Za:</b></p><ul class="sum small">${Pp.plus.map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
+  ${Pp.minus.length?`<p class="small" style="margin:8px 0 4px"><b>Przeciw:</b></p><ul class="sum small">${Pp.minus.map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
+  ${Hh?`<p class="note">Szansa w ciągu ~4 godzin: z ${Hh.n} podobnych sytuacji na świecach godzinowych z 6 miesięcy (zwykle wzrost w ${fmt(Hh.base,0)}%). Trafność tej metody w teście: ${Hh.acc==null?"–":fmt(Hh.acc,0)+"%"}.</p>`:""}</section>
  <div class="two"><section class="box"><h3>Typowe zakresy ceny</h3><p class="note" style="margin:0">W ok. 2 na 3 przypadkach cena powinna zmieścić się w tych przedziałach (liczone z wahań z ostatnich 60 sesji):</p>
   <table class="fc"><thead><tr><th>Kiedy</th><th>Od</th><th>Do</th><th>Ruch</th></tr></thead><tbody>${rng}</tbody></table></section>
  <section class="box"><h3>Co działo się w podobnych sytuacjach</h3>${an?`<p style="margin:0 0 6px" class="small">Sytuacja jak teraz (5 lat historii): <i>${esc(F.analog_state)}</i></p><ul class="sum">${an}</ul>`:`<p class="note">Za mało podobnych sytuacji w historii.</p>`}
@@ -302,15 +369,15 @@ function evRow(e,linkNames){const d=new Date(e.date);
  const fp=[e.forecast&&"prognoza: "+e.forecast,e.previous&&"poprzednio: "+e.previous].filter(Boolean).join(" · ");
  const chips=linkNames?`<div class="chips">${e.symbols.map((s,i)=>`<a class="chip" href="#i=${encodeURIComponent(s)}">${esc((e.names||[])[i]||s)}</a>`).join("")}</div>`:"";
  return `<div class="ev ${e.days<0?"past":""}"><div class="t">${t}</div><div><h4><span class="imp-${e.impact}" title="${imp}">●</span> ${esc(e.title)}</h4>
- <p>${[e.desc,fp,imp,e.source].filter(Boolean).map(esc).join(" · ")}</p>${chips}</div></div>`}
+ <p>${[e.desc,fp,imp,e.source].filter(Boolean).map(esc).join(" · ")}</p>${e.hint?`<p><b>Co to oznacza dla ceny:</b> ${esc(e.hint)}</p>`:""}${chips}</div></div>`}
 function tNewsy(it){const ev=eventsFor(it.symbol);
  $("tab").innerHTML=`<section class="box"><h3>Nadchodzące wydarzenia</h3>${ev.length?ev.slice(0,12).map(e=>`<div class="day" style="margin-top:8px">${whenTxt(e.days)} · ${dayTxt(e)}</div>${evRow(e,false)}`).join(""):`<p class="note">Brak zaplanowanych ważnych wydarzeń w najbliższym czasie.</p>`}</section>
  <section class="box"><h3>Wiadomości ze świata i z Polski</h3>
   <div class="seg" role="group" aria-label="Okres wiadomości" style="margin-bottom:10px"><button data-n="week" aria-pressed="${ntab==="week"}">Ostatnie 7 dni (${it.news.week.count})</button><button data-n="prev" aria-pressed="${ntab==="prev"}">Tydzień wcześniej (${it.news.prev.count})</button></div>
   <div id="nbody"></div></section>`;renderNews(it)}
 function renderNews(it){const N=it.news[ntab];
- $("nbody").innerHTML=`<p style="margin:0">${esc(N.text)}</p>${N.items.length?`<ul class="clean nlist" style="margin-top:8px">${N.items.map(n=>`<li><span class="dotc" style="background:${n.tone>0.2?"var(--up)":n.tone<-0.2?"var(--down)":"var(--dim)"}" title="${n.tone>0.2?"pozytywny":n.tone<-0.2?"negatywny":"neutralny"}"></span><span><a href="${esc(safe(n.link))}" target="_blank" rel="noopener">${esc(n.title)}</a><span class="nmeta">${n.tier<=1?`<span class="tag t${n.tier}">${n.tier===0?"oficjalne":"wiarygodne"}</span>`:""}<span class="tag">${n.lang.toUpperCase()}</span>${esc(n.source)} · ${ago(n.date)}</span></span></li>`).join("")}</ul>
- <p class="note">Najpierw pokazujemy wiadomości z najbardziej wiarygodnych źródeł. Kropka: zielona = ton pozytywny, czerwona = negatywny, szara = neutralny (ocena automatyczna).</p>`:""}`}
+ $("nbody").innerHTML=`<p style="margin:0">${esc(N.text)}</p>${N.items.length?`<ul class="clean nlist" style="margin-top:8px">${N.items.map(n=>newsLi(Object.assign({dir:n.tone>0.2?"up":n.tone<-0.2?"down":"neutral"},n))).join("")}</ul>
+ <p class="note">Pod każdą wiadomością: co może oznaczać dla ceny i dlaczego (ocena automatyczna – reguły rynkowe, np. „silny dolar szkodzi złotu”, i słownik słów). Najpierw pokazujemy najbardziej wiarygodne źródła.</p>`:""}`}
 function dayTxt(e){const d=e.time?new Date(e.date):new Date(e.date+"T12:00:00Z");return `${WDF[d.getDay()]} ${d.getDate()} ${MONF[d.getMonth()]}`}
 
 // ---------- KALENDARZ ----------
@@ -407,16 +474,117 @@ function viewPoradnik(){
   <div><b>Trafność / kalibracja</b> – jak często metoda miała rację w przeszłości i ile naprawdę znaczą jej wyniki.</div>
   <div><b>CFD</b> – kontrakt u brokera naśladujący cenę instrumentu. Pozwala grać na wzrost i spadek, z dźwignią.</div></div></details></section>`}
 
+
+// ---------- ŚWIECE JAPOŃSKIE: objaśnienia do nauki ----------
+const PAT={
+ hammer:{n:"Młot",d:"up",what:"Mały korpus u góry i długi dolny cień (co najmniej 2× dłuższy od korpusu), po spadkach.",mean:"Możliwe odwrócenie spadków w górę.",why:"W trakcie sesji sprzedający zepchnęli cenę nisko, ale kupujący ją odkupili i podnieśli prawie do otwarcia. To znak, że po spadkach pojawił się popyt."},
+ inv_hammer:{n:"Odwrócony młot",d:"up",what:"Mały korpus na dole i długi górny cień, po spadkach.",mean:"Słaby sygnał możliwego odbicia – potrzebuje potwierdzenia następną świecą wzrostową.",why:"Kupujący spróbowali podnieść cenę. Na razie nie utrzymali zdobyczy, ale sprzedający tracą przewagę."},
+ hanging_man:{n:"Wisielec",d:"down",what:"Wygląda jak młot (długi dolny cień), ale pojawia się po wzrostach.",mean:"Ostrzeżenie przed możliwym końcem wzrostów.",why:"W trakcie sesji pojawiła się silna sprzedaż. Kupujący jeszcze odrobili spadek, ale pokazało to, że podaż rośnie."},
+ shooting_star:{n:"Spadająca gwiazda",d:"down",what:"Mały korpus na dole i długi górny cień, po wzrostach.",mean:"Możliwe odwrócenie wzrostów w dół.",why:"Kupujący wypchnęli cenę wysoko, ale sprzedający zbili ją z powrotem. Wyżej zabrakło chętnych do kupna."},
+ bull_engulf:{n:"Objęcie hossy",d:"up",what:"Duża świeca wzrostowa, której korpus całkowicie „obejmuje” korpus poprzedniej świecy spadkowej.",mean:"Jeden z silniejszych sygnałów odwrócenia spadków.",why:"Kupujący nie tylko zatrzymali spadki, ale w jeden dzień odrobili cały ruch poprzedniego dnia z nawiązką."},
+ bear_engulf:{n:"Objęcie bessy",d:"down",what:"Duża świeca spadkowa obejmująca korpus poprzedniej świecy wzrostowej, po wzrostach.",mean:"Jeden z silniejszych sygnałów odwrócenia wzrostów.",why:"Sprzedający przejęli kontrolę i zabrali cały wzrost poprzedniego dnia."},
+ bull_harami:{n:"Harami hossy",d:"up",what:"Mała świeca wzrostowa mieszcząca się w korpusie poprzedniej dużej świecy spadkowej.",mean:"Spadki tracą siłę – możliwe odwrócenie (sygnał słabszy niż objęcie).",why:"Po mocnym spadku rynek się uspokoił i nie kontynuował ruchu w dół."},
+ bear_harami:{n:"Harami bessy",d:"down",what:"Mała świeca spadkowa wewnątrz korpusu poprzedniej dużej świecy wzrostowej.",mean:"Wzrosty tracą siłę.",why:"Po mocnym wzroście zabrakło kontynuacji – kupujący się wahają."},
+ piercing:{n:"Przenikanie",d:"up",what:"Po świecy spadkowej następna otwiera się niżej, ale zamyka powyżej połowy jej korpusu.",mean:"Możliwe odwrócenie spadków.",why:"Rynek otworzył się słabo, ale kupujący odrobili ponad połowę wczorajszego spadku."},
+ dark_cloud:{n:"Zasłona ciemnej chmury",d:"down",what:"Po świecy wzrostowej następna otwiera się wyżej, ale zamyka poniżej połowy jej korpusu.",mean:"Możliwe odwrócenie wzrostów.",why:"Mimo mocnego otwarcia sprzedający zabrali ponad połowę wczorajszego wzrostu."},
+ morning_star:{n:"Gwiazda poranna",d:"up",what:"Trzy świece: duża spadkowa, mała (niezdecydowanie), duża wzrostowa.",mean:"Klasyczny sygnał odwrócenia spadków w górę.",why:"Spadki wyhamowały (mała świeca), a potem kupujący zdecydowanie przejęli inicjatywę."},
+ evening_star:{n:"Gwiazda wieczorna",d:"down",what:"Trzy świece: duża wzrostowa, mała, duża spadkowa.",mean:"Klasyczny sygnał odwrócenia wzrostów w dół.",why:"Wzrosty wyhamowały, a potem sprzedający przejęli inicjatywę."},
+ three_soldiers:{n:"Trzej biali żołnierze",d:"up",what:"Trzy kolejne duże świece wzrostowe, każda zamyka się wyżej.",mean:"Silny, równy popyt – trend w górę.",why:"Przez trzy dni kupujący konsekwentnie przeważali, bez większej walki."},
+ three_crows:{n:"Trzy czarne wrony",d:"down",what:"Trzy kolejne duże świece spadkowe, każda zamyka się niżej.",mean:"Silna podaż – trend w dół.",why:"Przez trzy dni sprzedający konsekwentnie przeważali."},
+ bull_marubozu:{n:"Marubozu wzrostowe",d:"up",what:"Duża świeca wzrostowa prawie bez cieni – otwarcie przy dołku, zamknięcie przy szczycie.",mean:"Kupujący dominowali przez całą sesję – często kontynuacja wzrostów.",why:"Od otwarcia do zamknięcia cena praktycznie tylko rosła."},
+ bear_marubozu:{n:"Marubozu spadkowe",d:"down",what:"Duża świeca spadkowa prawie bez cieni.",mean:"Sprzedający dominowali przez całą sesję – często kontynuacja spadków.",why:"Od otwarcia do zamknięcia cena praktycznie tylko spadała."},
+ doji:{n:"Doji",d:"neutral",what:"Otwarcie i zamknięcie prawie na tym samym poziomie – korpus jak kreska.",mean:"Niezdecydowanie. Po silnym trendzie może zapowiadać jego koniec.",why:"Kupujący i sprzedający byli w równowadze – żadna strona nie wygrała sesji."}};
+const DIRTXT={up:"↑ może wspierać wzrost",down:"↓ może ciążyć cenie",neutral:"→ raczej bez wyraźnego wpływu"};
+const DIRCLS={up:"up",down:"down",neutral:"flat"};
+function candleDesc(o,h,l,c){const r=Math.max(h-l,1e-12),b=Math.abs(c-o),up=c>=o,uw=h-Math.max(o,c),lw=Math.min(o,c)-l;
+ const parts=[`Świeca ${up?"wzrostowa (zielona) – zamknięcie wyżej niż otwarcie":"spadkowa (czerwona) – zamknięcie niżej niż otwarcie"}.`];
+ parts.push(b/r>0.6?"Duży korpus: jedna strona wyraźnie wygrała sesję.":b/r<0.25?"Mały korpus: niezdecydowanie, siły były wyrównane.":"Średni korpus.");
+ if(uw/r>0.4)parts.push("Długi górny cień: cena była wyżej, ale sprzedający ją zbili – opór u góry.");
+ if(lw/r>0.4)parts.push("Długi dolny cień: cena była niżej, ale kupujący ją podnieśli – popyt na dole.");
+ return parts.join(" ")}
+
+// ---------- dodawanie / usuwanie instrumentów (przez zgłoszenie na GitHubie) ----------
+const REPO="https://github.com/alexanderdimer-ops/centrum-rynku";
+let pending=store.get("pending",[]);
+function issueUrl(title){return `${REPO}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent("Kliknij zielony przycisk „Create” (lub „Submit new issue”). Automat sam zmieni listę i odpowie tutaj w ciągu 2–3 minut. Niczego więcej nie trzeba robić.")}`}
+function requestAdd(q){q=q.trim();if(!q)return;pending=pending.filter(p=>Date.now()-p.t<36e5);pending.push({q,t:Date.now()});store.set("pending",pending);window.open(issueUrl("Dodaj: "+q),"_blank","noopener")}
+function requestRemove(it){if(confirm(`Usunąć ${it.name} z listy dla wszystkich urządzeń? Otworzy się GitHub – kliknij tam „Create”.`))window.open(issueUrl("Usuń: "+it.symbol),"_blank","noopener")}
+function pendingHtml(){pending=pending.filter(p=>Date.now()-p.t<36e5&&!D.items.some(i=>(i.name+" "+i.symbol).toLowerCase().includes(p.q.toLowerCase())));store.set("pending",pending);
+ return pending.length?`<p class="note">W trakcie dodawania: ${pending.map(p=>esc(p.q)).join(", ")} – pojawi się po ok. 2–3 minutach od kliknięcia „Create” na GitHubie (odśwież stronę).</p>`:""}
+
+// ---------- TERAZ WARTO ----------
+function candidates(){const own=new Set(D.items.map(i=>i.symbol));
+ const mine=D.items.map(it=>({symbol:it.symbol,name:it.name,group:it.group,currency:it.currency,price:it.price,change:it.change,score:it.potential.score,
+  plus:it.potential.plus,minus:it.potential.minus,risk:it.risk.level,risk_label:it.risk.label,stop:it.plan.stop,target:it.plan.target,own:true,dec:it.decision.key,
+  news:it.news.week.items.filter(n=>n.dir!=="neutral").slice(0,2),spark:it.hist.c.slice(-30)}));
+ const ext=((D.scan||{}).items||[]).filter(x=>!own.has(x.symbol));
+ return mine.concat(ext)}
+function oppCard(x){const st=x.score>=80?"go":x.score>=70?"wait":"no";
+ const sp=(()=>{const c=x.spark||[];if(c.length<2)return "";const mn=Math.min(...c),mx=Math.max(...c),k=mx-mn||1;return `<svg class="spark" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline points="${c.map((v,i)=>`${(i/(c.length-1)*100).toFixed(2)},${(38-(v-mn)/k*34).toFixed(2)}`).join(" ")}" fill="none" stroke="${c[c.length-1]>=c[0]?"var(--up)":"var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`})();
+ return `<article class="box opp"><header class="row" style="justify-content:space-between;align-items:flex-start"><div><h3 style="margin:0">${esc(x.name)}</h3><span class="sub">${esc(x.symbol)} · ${esc(x.group)} · ${x.own?"z Twojej listy":"spoza listy"}</span></div>
+ <div class="px">${fmt(x.price)} ${esc(x.currency)}<span class="chg ${sgn(x.change)}">${pct(x.change,2)}</span></div></header>
+ ${sp}<div class="row" style="gap:10px"><div style="flex:1">${bar(x.score,`var(--${st==="go"?"up":st==="wait"?"mid":"down"})`)}</div><b class="c-${st}">Potencjał ${x.score}/100</b></div>
+ <div class="cfoot" style="margin-top:8px"><span class="chip dot r${x.risk}">Ryzyko: ${esc(x.risk_label.toLowerCase())}</span>${x.earnings_days!=null&&x.earnings_days>=0&&x.earnings_days<=14?`<span class="chip" style="color:var(--info)">Wyniki ${whenTxt(x.earnings_days)}</span>`:""}</div>
+ <p class="small" style="margin:10px 0 4px"><b>Dlaczego teraz:</b></p><ul class="sum small">${x.plus.slice(0,4).map(t=>`<li>${esc(t)}</li>`).join("")}</ul>
+ ${x.minus.length?`<p class="small" style="margin:8px 0 4px"><b>Na co uważać:</b></p><ul class="sum small">${x.minus.slice(0,3).map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
+ ${(x.news||[]).length?`<ul class="clean nlist small" style="margin-top:6px">${x.news.slice(0,2).map(newsLi).join("")}</ul>`:""}
+ <p class="small mut" style="margin:8px 0">Przykładowy plan: stop loss ok. ${fmt(x.stop)}, cel ok. ${fmt(x.target)} (2× i 3× typowy ruch dzienny).</p>
+ <div class="row">${x.own?`<a class="btn sm pri" style="text-decoration:none" href="#i=${encodeURIComponent(x.symbol)}">Pełna analiza i kalkulator</a>`:`<button class="btn sm pri" data-add="${esc(x.symbol)}">Dodaj do mojej listy</button>`}</div></article>`}
+function newsLi(n){return `<li><span class="dotc" style="background:var(--${n.dir==="up"?"up":n.dir==="down"?"down":"dim"})"></span><span><a href="${esc(safe(n.link))}" target="_blank" rel="noopener">${esc(n.title)}</a>
+ <span class="nmeta"><b class="${DIRCLS[n.dir]||"flat"}">${DIRTXT[n.dir]||DIRTXT.neutral}</b> – ${esc(n.why||"")}</span>
+ <span class="nmeta">${n.tier<=1?`<span class="tag t${n.tier}">${n.tier===0?"oficjalne":"wiarygodne"}</span>`:""}${n.lang?`<span class="tag">${n.lang.toUpperCase()}</span>`:""}${esc(n.source)} · ${ago(n.date)}</span></span></li>`}
+function changeLi(c){return `<li><span class="dotc" style="background:var(--${c.dir==="up"?"up":"down"})"></span><span><a href="#i=${encodeURIComponent(c.symbol)}"><b>${esc(c.name)}</b></a> – ${esc(c.text)}<span class="nmeta">${ago(c.time)}</span></span></li>`}
+function viewTeraz(){
+ const all=candidates(),risky=all.filter(x=>x.score>=70&&x.risk>=4).length;
+ const top=all.filter(x=>x.score>=70&&x.risk<=3&&x.dec!=="no").sort((a,b)=>b.score-a.score).slice(0,6);
+ const warn=D.items.filter(it=>it.potential.score<=35||it.decision.key==="no").filter(it=>fav.includes(it.symbol)).slice(0,6);
+ const ch=(D.changes||[]),chFav=ch.filter(c=>fav.includes(c.symbol)),chOther=ch.filter(c=>!fav.includes(c.symbol));
+ store.set("seenChanges",ch.length?ch[0].time:"");updBadge();
+ const scanT=D.scan?new Date(D.scan.time):null;
+ $("app").innerHTML=`<div class="upd">${updTxt()}</div><h2 style="margin:4px 0 6px">Teraz warto</h2>
+ <p class="note" style="margin:0 0 12px">Instrumenty, które w tej chwili mają najlepszy układ: trend, wybicia, siła względem rynku, obroty, wiadomości i historia podobnych sytuacji – minus ryzyko i nadchodzące wyniki. Przeskanowano ${((D.scan||{}).items||[]).length+D.items.length} instrumentów z Twojej listy i z rynku${scanT?` (skan: ${hm(scanT)})`:""}. To lista do sprawdzenia, nie gotowe polecenie kupna.</p>
+ ${ch.length?`<section class="box"><h3>Zmiany od ostatnich aktualizacji</h3>${chFav.length?`<ul class="clean nlist">${chFav.slice(0,8).map(changeLi).join("")}</ul>`:`<p class="note">Brak zmian w ulubionych.</p>`}
+  ${chOther.length?`<details style="margin-top:6px"><summary class="small">Pozostałe instrumenty (${chOther.length})</summary><ul class="clean nlist">${chOther.slice(0,15).map(changeLi).join("")}</ul></details>`:""}
+  <div class="row" style="margin-top:8px"><button class="btn sm" id="notifBtn">${"Notification" in window&&Notification.permission==="granted"?"Powiadomienia w przeglądarce: włączone":"Włącz powiadomienia w przeglądarce"}</button></div></section>`:""}
+ <h3 style="margin:18px 0 10px">Największy potencjał teraz</h3>
+ ${top.length?`<div class="grid">${top.map(oppCard).join("")}</div>`:`<div class="msg">W tej chwili nic nie ma wyraźnie dobrego układu. Najlepszą decyzją bywa poczekać – brak transakcji to też pozycja.</div>`}
+ ${risky?`<p class="note">Pominięto ${risky} instrumentów z bardzo wysokim ryzykiem – mają dobry układ, ale są zbyt zmienne dla początkującego.</p>`:""}
+ ${warn.length?`<h3 style="margin:18px 0 10px">Na co uważać wśród ulubionych</h3><section class="box"><ul class="clean nlist">${warn.map(it=>`<li><span class="dotc" style="background:var(--down)"></span><span><a href="#i=${encodeURIComponent(it.symbol)}"><b>${esc(it.name)}</b></a> – ${esc(it.decision.title)}. ${esc((it.potential.minus[0]||it.decision.reasons[0]||""))}</span></li>`).join("")}</ul></section>`:""}
+ <h3 style="margin:18px 0 10px">Najważniejsze wiadomości ze świata</h3>
+ <section class="box">${((D.world||{}).items||[]).length?`<ul class="clean nlist">${D.world.items.slice(0,10).map(n=>newsLi(n).replace("</span></span></li>",`${n.names&&n.names.length?` · dotyczy: ${n.names.map(esc).join(", ")}`:""}</span></span></li>`)).join("")}</ul>`:`<p class="note">Brak świeżych wiadomości z wiarygodnych źródeł.</p>`}
+ <p class="note">Tylko z najbardziej wiarygodnych źródeł (Reuters, Bloomberg, CNBC, WSJ, FT, Yahoo Finance, PAP, Bankier i in.), z ostatnich 2 dni. Opis wpływu na cenę jest automatyczny.</p></section>`;
+ const nb=$("notifBtn");if(nb)nb.onclick=()=>{if(!("Notification" in window)){alert("Ta przeglądarka nie obsługuje powiadomień.");return}Notification.requestPermission().then(()=>viewTeraz())}}
+function updBadge(){const a=document.querySelector('.nav a[data-v="teraz"]');if(!a||!D)return;const seen=store.get("seenChanges","");
+ const n=(D.changes||[]).filter(c=>fav.includes(c.symbol)&&c.time>seen).length;a.dataset.badge=n?n:"";}
+
+// ---------- automatyczne odświeżanie ----------
+function toast(html){let t=$("toast");if(!t){t=document.createElement("div");t.id="toast";document.body.appendChild(t)}
+ t.innerHTML=html;t.className="show";clearTimeout(t._h);t._h=setTimeout(()=>t.className="",9000)}
+function refresh(){fetch("data.json?"+Date.now()).then(r=>r.json()).then(d=>{if(!D||d.updated===D.updated)return;
+ const old=new Set((D.changes||[]).map(c=>c.time+c.symbol+c.kind));D=d;
+ const fresh=(d.changes||[]).filter(c=>!old.has(c.time+c.symbol+c.kind)&&fav.includes(c.symbol));
+ const busy=document.activeElement&&/INPUT|SELECT/.test(document.activeElement.tagName)||/\/kalkulator$/.test(location.hash);
+ if(!busy)route();updBadge();
+ toast(fresh.length?`<b>Nowe dane – ${fresh.length} ${fresh.length===1?"zmiana":"zmiany"} w ulubionych:</b><br>${fresh.slice(0,3).map(c=>`${esc(c.name)}: ${esc(c.text)}`).join("<br>")}`:`Zaktualizowano dane (${hm(new Date(d.updated))}).`);
+ if(fresh.length&&"Notification" in window&&Notification.permission==="granted")fresh.slice(0,3).forEach(c=>new Notification(c.name+" – Centrum rynku",{body:c.text}))}).catch(()=>{})}
+setInterval(refresh,5*60*1000);
+
 // ---------- nawigacja ----------
 function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1));
  let v="rynki";const m=h.match(/^i=([^/]+)(?:\/(\w+))?$/);
- if(m)v="detail";else if(["kalendarz","dziennik","poradnik"].includes(h))v=h;
+ if(m)v="detail";else if(["teraz","kalendarz","dziennik","poradnik"].includes(h))v=h;
  document.querySelectorAll(".nav a").forEach(a=>a.setAttribute("aria-current",a.dataset.v===(v==="detail"?"rynki":v)?"page":"false"));
- if(v==="detail")viewDetail(m[1],m[2]);else({rynki:viewRynki,kalendarz:viewKalendarz,dziennik:viewDziennik,poradnik:viewPoradnik})[v]();
+ if(v==="detail")viewDetail(m[1],m[2]);else({rynki:viewRynki,teraz:viewTeraz,kalendarz:viewKalendarz,dziennik:viewDziennik,poradnik:viewPoradnik})[v]();
+ updBadge();
  if(!m||!m[2])window.scrollTo(0,0)}
 document.addEventListener("click",e=>{const t=e.target;
  const h=t.closest("[data-heart]");if(h){e.stopPropagation();const s=h.dataset.heart;fav=fav.includes(s)?fav.filter(x=>x!==s):[...fav,s];store.set("fav",fav);
-  document.querySelectorAll(`[data-heart="${CSS.escape(s)}"]`).forEach(b=>{const f=fav.includes(s);b.setAttribute("aria-pressed",f);b.textContent=f?"♥":"♡"});if($("out"))renderList();return}
+  document.querySelectorAll(`[data-heart="${CSS.escape(s)}"]`).forEach(b=>{const f=fav.includes(s);b.setAttribute("aria-pressed",f);b.textContent=f?"♥":"♡"});if($("out"))renderList();updBadge();return}
+ const ad=t.closest("[data-add]");if(ad){requestAdd(ad.dataset.add);return}
+ if(t.closest("#addBtn")){const q=$("addQ");requestAdd(q.value);q.value="";$("pend").innerHTML=pendingHtml();return}
+ if(t.closest("[data-remove]")){requestRemove(item(curSym()));return}
+ const cm=t.closest("[data-cm]");if(cm){chartMode=cm.dataset.cm;store.set("chartMode",chartMode);document.querySelectorAll("[data-cm]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.cm===chartMode));selCandle=null;drawChart(item(curSym()));return}
+ const cp=t.closest("[data-cpick]");if(cp){selCandle=+cp.dataset.cpick;drawChart(item(curSym()));$("cw").scrollIntoView({behavior:"smooth",block:"center"});return}
  const o=t.closest("[data-open]");if(o){location.hash="i="+encodeURIComponent(o.dataset.open);return}
  if(t.closest("[data-back]")){history.length>1?history.back():(location.hash="#rynki");return}
  const tb=t.closest("[data-tab]");if(tb){const m=decodeURIComponent(location.hash.slice(1)).match(/^i=([^/]+)/);if(m){history.replaceState(null,"","#i="+encodeURIComponent(m[1])+"/"+tb.dataset.tab);route();window.scrollTo(0,$("tab").offsetTop-120)}return}
