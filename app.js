@@ -364,6 +364,7 @@ function tPrognoza(it){const F=it.forecast,bt=it.bt,S=it.setups;
   <table class="fc"><thead><tr><th>Kiedy</th><th>Od</th><th>Do</th><th>Ruch</th></tr></thead><tbody>${rng}</tbody></table></section>
  <section class="box"><h3>Co działo się w podobnych sytuacjach</h3>${an?`<p style="margin:0 0 6px" class="small">Sytuacja jak teraz (5 lat historii): <i>${esc(F.analog_state)}</i></p><ul class="sum">${an}</ul>`:`<p class="note">Za mało podobnych sytuacji w historii.</p>`}
   ${su?`<p style="margin:12px 0 6px" class="small">Czy warunki wzrostu z zakładki „Decyzja” działały na tym instrumencie:</p><ul class="sum">${su}</ul>`:""}</section></div>
+ ${mlBox(it)}${extrasBox(it)}
  <section class="box"><h3>Skąd ten wynik – ${it.methods.length} niezależnych metod</h3>${meth}
   <p class="note" style="margin:10px 0 0">Surowa średnia metod: ${fmt(it.raw,0)}%. Test na historii (${bt.days} sesji): pasek trafiał kierunek w ${bt.overall==null?"–":fmt(bt.overall,0)+"%"} przypadków, a wzrostowych sesji było ${fmt(bt.up_share,0)}%. Dlatego szansa jest skalibrowana: siła sygnału ×${fmt(bt.k,2)} wokół naturalnej częstości wzrostów ${fmt(bt.base,0)}%. Wagi metod liczone są tylko z wcześniejszych danych.</p></section>
  <p class="note">To spekulacja oparta na historii, nie pewnik. Nagłe wydarzenia (wyniki spółki, decyzje banków centralnych, wojny) mogą wszystko zmienić.</p>`}
@@ -633,6 +634,7 @@ function viewWyniki(){resolveTests();const T=D.track||{},HT=D.hist_test||{},P=T.
   ${curveSvg?`<p class="small" style="margin:12px 0 4px">Łączny wynik w czasie (R):</p>${curveSvg}`:""}
   ${open.length?`<details style="margin-top:10px"><summary class="small">Otwarte (${open.length})</summary><ul class="clean nlist small">${open.map(x=>{const it=item(x.s),r=it?(it.price-x.px)/(x.px-x.stop):0;return `<li><span class="dotc" style="background:var(--${r>=0?"up":"down"})"></span><span><b>${esc(x.n||x.s)}</b> od ${new Date(x.t).toLocaleDateString("pl-PL")} po ${fmt(x.px)} · stop ${fmt(x.stop)} · cel ${fmt(x.target)} · teraz <b class="${sgn(r)}">${r>=0?"+":"−"}${fmt(Math.abs(r),2)} R</b></span></li>`}).join("")}</ul></details>`:""}
   ${closed.length?`<details style="margin-top:6px"><summary class="small">Ostatnio zamknięte (${closed.length})</summary><ul class="clean nlist small">${closed.map(x=>`<li><span class="dotc" style="background:var(--${x.R>0?"up":"down"})"></span><span><b>${esc(x.n||x.s)}</b> · ${{stop:"stop loss",cel:"cel osiągnięty",czas:"koniec czasu"}[x.res]} · <b class="${sgn(x.R)}">${x.R>=0?"+":"−"}${fmt(Math.abs(x.R),2)} R</b><span class="nmeta">${new Date(x.t).toLocaleDateString("pl-PL")} → ${new Date(x.end).toLocaleDateString("pl-PL")}</span></span></li>`).join("")}</ul></details>`:""}</section>
+ ${mlWyniki()}
  <section class="box"><h3>Test na historii (ostatnie ~4 lata)</h3>${hs&&he?`<p class="small" style="margin-top:-4px">Gdyby strona działała wcześniej i wchodziła przy spełnionych warunkach wzrostu (stop 2×ATR, cel 3×ATR, maks. 10 sesji):</p>
   <div class="tiles"><div class="tile"><b>Transakcji</b><span>${hs.n}</span></div><div class="tile"><b>Zyskowne</b><span>${fmt(hs.win*100,0)}%</span></div><div class="tile"><b>Średnio</b><span class="${sgn(hs.avgR)}">${hs.avgR>=0?"+":"−"}${fmt(Math.abs(hs.avgR),2)} R</span></div><div class="tile"><b>Wejście w losowy dzień</b><span>${he.avgR>=0?"+":"−"}${fmt(Math.abs(he.avgR),2)} R</span></div></div>
   <p class="note">${hs.avgR>he.avgR+0.03?`Sygnały strony dawały średnio lepszy wynik niż wchodzenie w przypadkowe dni (${fmt(hs.avgR,2)} R wobec ${fmt(he.avgR,2)} R) – jest mała, ale realna przewaga.`:`Sygnały strony nie były wyraźnie lepsze od wchodzenia w przypadkowe dni – traktuj je jako porządkowanie informacji, nie gotowy przepis na zysk.`} Wynik nie uwzględnia kosztów (spread, prowizje), które zmniejszają zysk. Rynki w tym okresie w większości rosły, co pomaga każdej strategii kupna.</p>`:`<p class="note">Brak danych.</p>`}</section>
@@ -673,6 +675,34 @@ function annSvg(it,S,X,Y,step,pt,ih,pl,iw,s0){const A=it.chart;if(!A||!annOn||S.
 function annInfo(key,price){const a=ANN[key];if(!a)return;const el=$("cinfo");el.innerHTML=`<div class="cbox"><p style="margin:0"><b>${a.n}${price?" "+fmt(+price):""}</b></p><p class="small" style="margin:6px 0 0">${a.t}</p></div>`}
 function storyBox(it){const A=it.chart;if(!A)return "";return `<section class="box"><h3>Co teraz widać na wykresie</h3><ul class="sum">${A.story.map(s=>`<li>${esc(s)}</li>`).join("")}</ul>
  <p class="note">Strona sama analizuje wykres z ostatniego roku. Na wykresie świecowym zaznacza: tło zielone/czerwone (kto ma przewagę), opory i wsparcia (ile razy cena tam zawracała), linię trendu, podwójne szczyty/dołki, wybicia i krzyże średnich. Kliknij element, żeby zobaczyć, co oznacza.</p></section>`}
+
+
+// ---------- UCZENIE MASZYNOWE I DODATKOWE ŹRÓDŁA ----------
+function mlInfo(h){const M=(D.ml||{})[h];return M||null}
+function mlBox(it){const m=it.ml;if(!m)return "";const t=mlInfo("1w"),w=t?t.weight:0;
+ const tl=(l,v)=>`<div class="stat"><b>${l}</b><strong class="${p50(v)}">${v==null?"–":fmt(v,0)+"%"}</strong></div>`;
+ return `<section class="box"><h3>Uczenie maszynowe</h3>
+ <p class="small" style="margin-top:-4px">Model uczy się codziennie od nowa na 5 latach historii ok. 60 instrumentów (17 cech: tempo ruchu, średnie, RSI, zmienność, obroty, świece, szeroki rynek). Poniżej jego szanse wzrostu dla ${esc(it.name)}:</p>
+ <div class="stats3">${tl("Jutro",m["1d"])}${tl("Za tydzień",m["1w"])}${tl("Za miesiąc",m["1m"])}</div>
+ ${m.why?`${m.why.plus.length?`<p class="small" style="margin:0 0 4px"><b>Co według modelu podnosi szansę:</b> ${m.why.plus.map(esc).join(", ")}.</p>`:""}${m.why.minus.length?`<p class="small" style="margin:0"><b>Co obniża:</b> ${m.why.minus.map(esc).join(", ")}.</p>`:""}`:""}
+ ${t?`<p class="note">Uczciwy test (ostatni rok, którego model nie widział podczas nauki): trafność za tydzień ${fmt(t.test.acc,1)}% wobec ${fmt(t.test.majority,1)}% przy zawsze „wzrost”. ${w>0?`Model ma przewagę, więc wpływa na wyniki strony z wagą ${fmt(w*100,0)}%.`:`Model nie ma teraz przewagi, więc <b>nie wpływa</b> na wyniki strony. Sprawdza się codziennie i sam się włączy, gdy zacznie wygrywać.`}</p>`:""}</section>`}
+function extrasBox(it){const X=it.extras||{};const rows=[];
+ if(X.analysts){const A=X.analysts;rows.push(["Prognozy analityków (12 mies.)",`${esc(A.text)} Najniższa ${fmt(A.low)} USD, najwyższa ${fmt(A.high)} USD. <span class="dim">Źródło: Nasdaq.</span>`])}
+ if(X.cot)rows.push(["Pozycje dużych graczy (COT)",`${esc(X.cot.text)} <span class="dim">Raport CFTC z ${esc(X.cot.date)}${X.cot.name.includes("WTI")?"; dla ropy Brent używamy raportu ropy WTI":""}.</span>`]);
+ if(X.sector)rows.push(["Branża",esc(X.sector.text)]);
+ if(X.earn)rows.push(["Reakcje na poprzednie wyniki",`${esc(X.earn.text)}<br>${X.earn.items.map(e=>`${new Date(e.date).toLocaleDateString("pl-PL")}: <b class="${sgn(e.move)}">${pct(e.move*100)}</b>${e.surprise!=null?` (zysk ${e.surprise>=0?"lepszy":"gorszy"} od prognoz o ${fmt(Math.abs(e.surprise),1)}%)`:""}`).join(" · ")}`]);
+ if(X.season&&X.season.text)rows.push(["Sezonowość miesięczna",`${esc(X.season.text)}${X.season.next?` W kolejnym miesiącu: wzrost w ${fmt(X.season.next.up*100,0)}% lat.`:""}`]);
+ if(!rows.length)return "";
+ return `<section class="box"><h3>Dodatkowe źródła informacji</h3><dl class="kv ex">${rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+ <p class="note">Te informacje wpływają na ocenę potencjału (głównie średnio- i długoterminowego). Raporty COT dotyczą złota, srebra i ropy, prognozy analityków i branża – spółek z USA.</p></section>`}
+function mlWyniki(){const M=D.ml;if(!M)return "";const H={"1d":"Jutro","1w":"Za tydzień","1m":"Za miesiąc"};
+ const live=M.live||{};const L=live["1w"]||live["1d"];
+ return `<section class="box"><h3>Uczenie maszynowe – jak radzi sobie model</h3>
+ <p class="small" style="margin-top:-4px">Model uczy się od nowa każdego dnia (ostatnio: ${esc(M.date||"–")}). Ostatni rok danych jest odkładany i model sprawdzany jest tylko na nim – to uczciwy test, bez „podglądania” wyników.</p>
+ <table class="fc"><thead><tr><th>Horyzont</th><th>Trafność w teście</th><th>Zawsze „wzrost”</th><th>Wpływ na stronę</th></tr></thead><tbody>
+ ${Object.entries(H).filter(([h])=>M[h]).map(([h,l])=>`<tr><td>${l}</td><td>${fmt(M[h].test.acc,1)}%</td><td>${fmt(M[h].test.majority,1)}%</td><td>${M[h].weight>0?fmt(M[h].weight*100,0)+"%":"wyłączony"}</td></tr>`).join("")}</tbody></table>
+ ${M["1w"]&&M["1w"].lessons.length?`<p class="small" style="margin:10px 0 4px"><b>Czego model się nauczył z historii:</b></p><ul class="sum small">${M["1w"].lessons.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}
+ <p class="note">Wniosek na dziś: z samego wykresu model nie znajduje trwałej przewagi – to normalne na płynnych rynkach, dlatego strona go nie słucha, dopóki nie zacznie wygrywać. ${L?`Drugi model uczy się na własnych, sprawdzonych przewidywaniach strony (z newsami, analitykami, COT i oceną potencjału): zebrano ${L.n} z ${L.need} potrzebnych przypadków${L.test?`, trafność w teście ${fmt(L.test.acc,1)}%`:""}.`:""}</p></section>`}
 
 // ---------- nawigacja ----------
 function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1));

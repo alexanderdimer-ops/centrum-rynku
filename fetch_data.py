@@ -9,7 +9,37 @@ Opcjonalnie wysyła powiadomienia na telefon przez ntfy.sh (sekret NTFY_TOPIC w 
 import json, math, os, re, sys, time, hashlib, statistics as st, urllib.request, urllib.parse, datetime as dt
 import email.utils
 import xml.etree.ElementTree as ET
-import track
+import track, ml, extras
+
+MODEL = {}  # wytrenowane modele uczenia maszynowego (ustawiane w głównym przebiegu)
+
+
+def ml_predict(H, rc):
+    """Szanse z modelu uczenia maszynowego + ile modelowi ufać (waga zależy od uczciwego testu)."""
+    if not MODEL:
+        return None
+    P = ml.prep(H, rc)
+    x = ml.feat(P, len(H["c"]) - 1)
+    if x is None:
+        return None
+    out = {"x": [round(v, 3) for v in x]}
+    for h in ("1d", "1w", "1m"):
+        m = MODEL.get(h)
+        if m:
+            out[h] = round(ml.predict(m, x) * 100, 1)
+            out["w_" + h] = ml.blend_weight(m.get("test"))
+    if MODEL.get("1w"):
+        out["why"] = ml.explain(MODEL["1w"], x)
+    return out
+
+
+def adjust(pot, delta, text, plus=True):
+    """Dopisuje wpływ dodatkowego źródła do oceny potencjału (score, plus, minus)."""
+    if pot is None or pot[0] is None or abs(delta) < 0.5:
+        return pot
+    sc, pl, mi = pot
+    (pl if delta > 0 else mi).append(text)
+    return round(max(0, min(100, sc + delta))), pl, mi
 from collections import Counter
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -1296,6 +1326,15 @@ def scan(prev_scan, own):
             score, plus, minus = potential(H, rc, setups, None, None, vol_level(ann), None, pats)
             ps_ = potential_short(H, None, None, patterns_at(H["o"], H["h"], H["l"], c, n - 1), None, None, vol_level(ann))
             pl_ = potential_long(H, rc)
+            mlp = ml_predict(H, rc) if n >= 300 else None
+            if mlp:
+                if mlp.get("w_1w"):
+                    score = adjust((score, plus, minus), (mlp["1w"] - 50) * mlp["w_1w"] * 2,
+                                   f"Model uczenia maszynowego: szansa wzrostu w tydzień {mlp['1w']:.0f}%.")[0]
+                if mlp.get("w_1d"):
+                    ps_ = adjust(ps_, (mlp["1d"] - 50) * mlp["w_1d"] * 2, f"Model uczenia maszynowego: szansa wzrostu jutro {mlp['1d']:.0f}%.")
+                if mlp.get("w_1m"):
+                    pl_ = adjust(pl_, (mlp["1m"] - 50) * mlp["w_1m"] * 2, f"Model uczenia maszynowego: szansa wzrostu w miesiąc {mlp['1m']:.0f}%.")
             a = atr(H["h"], H["l"], c, n - 1)
             out.append({"symbol": sym, "name": H["name"], "group": group, "currency": H["cur"], "price": c[-1],
                         "change": (c[-1] / c[-2] - 1) * 100, "score": score, "plus": plus, "minus": minus,
@@ -1560,6 +1599,72 @@ def analyze(ins, bankier, cal, vix):
     live = crypto or bool(intra and NOW.timestamp() - intra["t"][-1] < 1800)
     p_month = next((a["p"] * 100 for a in an if a["label"] == "miesiąc"), None)
 
+    # uczenie maszynowe: łączymy z resztą tylko w takim stopniu, w jakim model sprawdził się w teście
+    mlp = ml_predict(H, S["rc"])
+    if mlp:
+        for key, h in (("overall", "1d"), ("p_week", "1w"), ("p_month", "1m")):
+            a_ = mlp.get("w_" + h, 0)
+            if a_ and mlp.get(h) is not None:
+                cur = {"overall": p_up, "p_week": p_week, "p_month": p_month}[key]
+                if cur is not None:
+                    v_ = clamp((1 - a_) * cur + a_ * mlp[h])
+                    if key == "overall": p_up = v_
+                    elif key == "p_week": p_week = v_
+                    else: p_month = v_
+        pot = adjust((pot, plus, minus), (mlp["1w"] - 50) * mlp.get("w_1w", 0) * 2,
+                     f"Model uczenia maszynowego: szansa wzrostu w tydzień {mlp['1w']:.0f}%.")
+        pot, plus, minus = pot
+        pot_s = adjust(pot_s, (mlp["1d"] - 50) * mlp.get("w_1d", 0) * 2, f"Model uczenia maszynowego: szansa wzrostu jutro {mlp['1d']:.0f}%.")
+        if mlp.get("1m") is not None:
+            pot_l = adjust(pot_l, (mlp["1m"] - 50) * mlp.get("w_1m", 0) * 2, f"Model uczenia maszynowego: szansa wzrostu w miesiąc {mlp['1m']:.0f}%.")
+
+    # dodatkowe, niezależne źródła
+    ex = {}
+    def safe(name, fn):
+        try:
+            v_ = fn()
+            if v_: ex[name] = v_
+        except Exception as e_:
+            print("Pominięto", name, ins["symbol"], e_)
+    safe("cot", lambda: extras.cot(ins["symbol"], get_json))
+    if ins.get("earnings"):
+        safe("analysts", lambda: extras.analysts(ins["symbol"], c[-1], get_json))
+        safe("sector", lambda: extras.sector(ins["symbol"], H, get_json, history))
+    safe("earn", lambda: extras.earnings_moves(ins, H, get_json, get))
+    safe("season", lambda: extras.seasonality(ins["symbol"], get_json, chart_url))
+    if "cot" in ex:
+        d_ = ex["cot"]["dir"]
+        pot, plus, minus = adjust((pot, plus, minus), 4 * d_, "COT: " + ex["cot"]["text"])
+        pot_l = adjust(pot_l, 3 * d_, "COT: " + ex["cot"]["text"])
+    if "analysts" in ex:
+        A = ex["analysts"]
+        d_ = 5 if A["upside"] > 0.15 and A["buy_share"] > 0.6 else -5 if A["upside"] < -0.03 else 0
+        pot_l = adjust(pot_l, d_ * 1.2, A["text"])
+        pot, plus, minus = adjust((pot, plus, minus), d_ * 0.6, A["text"])
+    if "sector" in ex:
+        Sx = ex["sector"]
+        d_ = (2 if Sx["etf_up"] else -2) + (2 if Sx["rel_3m"] > 0.03 else -2 if Sx["rel_3m"] < -0.03 else 0)
+        pot, plus, minus = adjust((pot, plus, minus), d_, Sx["text"])
+        pot_l = adjust(pot_l, d_, Sx["text"])
+    if "season" in ex and ex["season"]["cur"] and ex["season"]["cur"]["n"] >= 10:
+        Se = ex["season"]; d_ = (Se["cur"]["up"] - Se["base"]) * 20
+        pot_l = adjust(pot_l, max(-3, min(3, d_)), Se["text"])
+    # cechy do „modelu na żywo” (uczy się na rozliczonych przewidywaniach strony)
+    live_x = (mlp["x"] if mlp else [0.0] * len(ml.LABELS)) + [
+        round(week["tone"] if week["count"] else 0.0, 3), (pot_s[0] or 50) / 100 - 0.5, pot / 100 - 0.5,
+        ((pot_l[0] if pot_l and pot_l[0] is not None else 50) / 100) - 0.5,
+        round(max(-0.5, min(0.5, ex["analysts"]["upside"])), 3) if "analysts" in ex else 0.0,
+        (ex["cot"]["index"] / 100 - 0.5) if "cot" in ex else 0.0,
+        {"good": 1.0, "mid": 0.0, "bad": -1.0}[vkey]]
+    for key, h in (("overall", "1d"), ("p_week", "1w")):
+        lm = MODEL.get("live_" + h)
+        if lm and ml.blend_weight(lm.get("test")) > 0:
+            a_, pl_v = ml.blend_weight(lm["test"]), ml.predict(lm, live_x) * 100
+            if key == "overall": p_up = clamp((1 - a_) * p_up + a_ * pl_v)
+            elif p_week is not None: p_week = clamp((1 - a_) * p_week + a_ * pl_v)
+    if "earn" in ex and any(e["kind"] == "wyniki" and 0 <= e["days"] <= 14 for e in my_events):
+        risk["why"].append("Wyniki spółki w ciągu 2 tygodni. " + ex["earn"]["text"])
+
     t0 = days[0].toordinal()
     return {"symbol": ins["symbol"], "name": ins["name"], "group": ins["group"], "currency": H["cur"],
             "price": c[-1], "change": change * 100, "date": days[-1].isoformat(),
@@ -1569,7 +1674,10 @@ def analyze(ins, bankier, cal, vix):
                    "days": bt["overall"][1], "up_share": round(bt["up_share"] * 100, 1),
                    "k": round(bt["k"], 2), "base": round(bt["base"] * 100, 1)},
             "setups": setups,
-            "summary": describe(ins, lv, pf, rs, ref_info, week, bt, risk, setups),
+            "summary": describe(ins, lv, pf, rs, ref_info, week, bt, risk, setups)
+                       + [v["text"] for k, v in ex.items() if v.get("text") and k != "season"]
+                       + ([ex["season"]["text"]] if ex.get("season", {}).get("text") else []),
+            "extras": ex, "ml": mlp, "live_x": live_x,
             "plan": plan, "levels": lv, "rsi": rs, "perf": pf,
             "today_vs_typical": abs(change) / lv["sd60"] if lv["sd60"] else None,
             "forecast": {"ranges": ranges, "analogs": an, "analog_state": an_desc},
@@ -1641,6 +1749,33 @@ if __name__ == "__main__":
             print("RSS pominięty:", f, e)
     cal = calendar(instruments, (prev or {}).get("calendar", []))
     try:
+        old_model = json.load(open("model.json", encoding="utf-8"))
+    except Exception:
+        old_model = None
+    today = NOW.date().isoformat()
+    if not (old_model and old_model.get("date") == today and old_model.get("v") == ml.VERSION):
+        prepped = []
+        syms = {i["symbol"]: i.get("ref") for i in instruments}
+        for s_ in UNIVERSE:
+            syms.setdefault(s_, ref_for(s_, group_of(s_)))
+        for s_, r_ in syms.items():
+            try:
+                H_ = history(s_)
+                if len(H_["c"]) >= 600:
+                    prepped.append((s_, ml.prep(H_, align(H_["d"], history(r_)) if r_ else None)))
+            except Exception as e:
+                print("Model: pominięto", s_, e)
+        old_model = ml.train(prepped, today)
+        print("Wytrenowano model uczenia maszynowego na", len(prepped), "instrumentach")
+    MODEL.update({h: old_model[h] for h in ("1d", "1w", "1m") if h in old_model})
+    for h in ("1d", "1w"):
+        if old_model.get("live", {}).get(h):
+            MODEL["live_" + h] = old_model["live"][h]
+    live_m = ml.train_live(track.load(), old_model.get("live")) if hasattr(ml, "train_live") else None
+    if live_m:
+        old_model["live"] = live_m
+    json.dump(old_model, open("model.json", "w", encoding="utf-8"))
+    try:
         vix = history("^VIX")["c"][-1]
     except Exception:
         vix = None
@@ -1691,6 +1826,10 @@ if __name__ == "__main__":
         json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items,
                    "changes": changes, "scan": sc, "world": world, "picks": picks,
                    "track": track.summary(tr, names),
+                   "ml": {"date": old_model.get("date"), "live": old_model.get("live", {}).get("summary"),
+                          **{h: {"test": old_model[h]["test"], "weight": ml.blend_weight(old_model[h]["test"]),
+                                 "lessons": old_model[h]["lessons"], "n": old_model[h]["n_train"]}
+                             for h in ("1d", "1w", "1m") if h in old_model}},
                    "hist_test": {"signal": agg("signal"), "every": agg("every"), "instruments": len(hs)}},
                   f, ensure_ascii=False, separators=(",", ":"))
     print("Zapisano", len(items), "instrumentów,", len(cal), "wydarzeń w kalendarzu")

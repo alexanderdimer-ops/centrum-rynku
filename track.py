@@ -89,8 +89,11 @@ def update(tr, now, items, scan_items, picks_now):
             k = (it["symbol"], h)
             if k in last and now - dt.datetime.fromisoformat(last[k]) < EVERY[h]:
                 continue
-            tr["preds"].append({"s": it["symbol"], "h": h, "t": now.isoformat(), "due": (now + HZ[h]).isoformat(),
-                                "px": it["price"], "p": p, "dec": it["decision"]["key"]})
+            rec = {"s": it["symbol"], "h": h, "t": now.isoformat(), "due": (now + HZ[h]).isoformat(),
+                   "px": it["price"], "p": p, "dec": it["decision"]["key"]}
+            if h in ("1d", "1w") and it.get("live_x"):
+                rec["f"] = it["live_x"]  # cechy do nauki drugiego modelu na własnych wynikach
+            tr["preds"].append(rec)
 
     # 3. wirtualne transakcje: wejście przy „Możesz rozważyć wejście”, wyjście na stopie, celu lub po 10 dniach
     open_syms = {x["s"] for x in tr["sims"] if x.get("end") is None}

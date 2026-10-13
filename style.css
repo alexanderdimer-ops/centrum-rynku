@@ -171,3 +171,5 @@ footer{color:var(--dim);font-size:12.5px;padding:8px 16px 30px;max-width:1100px;
 .stats3.pot .stat{cursor:pointer;text-align:left;font:inherit;color:inherit}
 .stat.sel{border-color:var(--ink);background:var(--card2)}
 .tile small{margin-top:2px}
+.kv.ex{grid-template-columns:minmax(120px,190px) 1fr}.kv.ex dd{text-align:left;font-weight:400;font-size:13.5px}.kv.ex dt{font-size:13.5px}
+@media (max-width:520px){.kv.ex{grid-template-columns:1fr}.kv.ex dt{font-weight:600;color:var(--ink);margin-top:6px}}
