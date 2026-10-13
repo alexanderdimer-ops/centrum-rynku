@@ -39,8 +39,9 @@ jobs:
             git show origin/dane:track.json > /tmp/t.json 2>/dev/null && mv /tmp/t.json track.json || true
           git show origin/dane:model.json > /tmp/m.json 2>/dev/null && mv /tmp/m.json model.json || true
           git show origin/dane:replay.json > /tmp/r.json 2>/dev/null && mv /tmp/r.json replay.json || true
+          git show origin/dane:lab.json > /tmp/l.json 2>/dev/null && mv /tmp/l.json lab.json || true
             python fetch_data.py
-            d=$(mktemp -d); cp data.json "$d"/; cp track.json model.json replay.json "$d"/ 2>/dev/null || true
+            d=$(mktemp -d); cp data.json "$d"/; cp track.json model.json replay.json lab.json "$d"/ 2>/dev/null || true
             (cd "$d" && git init -q -b dane && git add . && git -c user.name=dane-bot -c user.email=bot@users.noreply.github.com commit -qm "Dane po zmianie listy" \
               && git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" dane)
           fi

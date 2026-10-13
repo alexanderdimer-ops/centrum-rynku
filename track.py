@@ -9,8 +9,14 @@ Na tej podstawie strona się koryguje: kalibruje szanse i zaostrza próg w „Te
 """
 import json, datetime as dt
 
-HZ = {"4h": dt.timedelta(hours=4), "1d": dt.timedelta(days=1), "1w": dt.timedelta(days=7), "1m": dt.timedelta(days=30)}
-EVERY = {"4h": dt.timedelta(hours=4), "1d": dt.timedelta(hours=20), "1w": dt.timedelta(hours=20), "1m": dt.timedelta(days=6)}
+HZ = {"4h": dt.timedelta(hours=4), "1d": dt.timedelta(days=1), "1w": dt.timedelta(days=7), "1m": dt.timedelta(days=30),
+      # pewne sygnały z laboratorium i przewidywania modelu dla szerokiego rynku (skaner)
+      "sure_1d": dt.timedelta(days=1), "sure_1w": dt.timedelta(days=7), "sure_1m": dt.timedelta(days=30),
+      "scan_1d": dt.timedelta(days=1), "scan_1w": dt.timedelta(days=7)}
+EVERY = {"4h": dt.timedelta(hours=2), "1d": dt.timedelta(hours=20), "1w": dt.timedelta(hours=20), "1m": dt.timedelta(days=6),
+         "sure_1d": dt.timedelta(hours=20), "sure_1w": dt.timedelta(hours=20), "sure_1m": dt.timedelta(days=6),
+         "scan_1d": dt.timedelta(hours=20), "scan_1w": dt.timedelta(hours=20)}
+MAIN = ("4h", "1d", "1w", "1m")
 PICK_HZ = {"short": dt.timedelta(days=1), "mid": dt.timedelta(days=7), "long": dt.timedelta(days=30)}
 BINS = [(0, 45), (45, 50), (50, 55), (55, 60), (60, 101)]
 
@@ -105,6 +111,9 @@ def update(tr, now, items, scan_items, picks_now):
             continue
         probs = {"4h": (it.get("hours") or {}).get("p"), "1d": it.get("overall"), "1w": it.get("p_week"),
                  "1m": it.get("p_month")}
+        for h_, L_ in (it.get("lab") or {}).items():
+            if L_.get("sure"):
+                probs["sure_" + h_] = L_["p"]
         for h, p in probs.items():
             if p is None or abs(p - 50) < 1:
                 continue
@@ -116,6 +125,19 @@ def update(tr, now, items, scan_items, picks_now):
             if h in ("1d", "1w") and it.get("live_x"):
                 rec["f"] = it["live_x"]  # cechy do nauki drugiego modelu na własnych wynikach
             tr["preds"].append(rec)
+
+    # 2b. szeroki rynek: przewidywania modelu dla instrumentów ze skanera (więcej testów = szybsza nauka)
+    own = set(by_sym)
+    for x in scan_items:
+        if x["symbol"] in own or not x.get("ml"):
+            continue
+        for h in ("1d", "1w"):
+            p = x["ml"].get(h)
+            k = (x["symbol"], "scan_" + h)
+            if p is None or abs(p - 50) < 1 or (k in last and now - dt.datetime.fromisoformat(last[k]) < EVERY["scan_" + h]):
+                continue
+            tr["preds"].append({"s": x["symbol"], "h": "scan_" + h, "t": now.isoformat(),
+                                "due": (now + HZ["scan_" + h]).isoformat(), "px": x["price"], "p": p, "dec": None})
 
     # 3. wirtualne transakcje: wejście przy „Możesz rozważyć wejście”, wyjście na stopie, celu lub po 10 dniach
     open_syms = {x["s"] for x in tr["sims"] if x.get("end") is None}
@@ -230,10 +252,25 @@ def update(tr, now, items, scan_items, picks_now):
 
     # 6. porządki: trzymamy ostatnie wpisy (liczniki w stats zostają)
     cut = (now - dt.timedelta(days=45)).isoformat()
-    tr["preds"] = [p for p in tr["preds"] if p.get("res") is None or p["t"] > cut][-6000:]
+    tr["preds"] = [p for p in tr["preds"] if p.get("res") is None or p["t"] > cut][-12000:]
     tr["sims"] = [x for x in tr["sims"] if x.get("end") is None or x["t"] > cut][-300:]
     tr["picks"] = [x for x in tr["picks"] if x.get("res") is None or x["t"] > (now - dt.timedelta(days=90)).isoformat()][-400:]
     return tr
+
+
+def activity(tr, now_iso=""):
+    """Co strona robiła w ostatniej dobie – do wyświetlenia „na żywo”."""
+    if not now_iso:
+        return {}
+    now = dt.datetime.fromisoformat(now_iso)
+    day = (now - dt.timedelta(days=1)).isoformat()
+    made = [p for p in tr["preds"] if p["t"] > day]
+    res = [p for p in tr["preds"] if p.get("res") is not None and p["due"] > day and p["due"] <= now.isoformat()]
+    hit = sum((p["p"] > 50) == p["up"] for p in res)
+    nxt = sorted(p["due"] for p in tr["preds"] if p.get("res") is None)
+    return {"made_24h": len(made), "resolved_24h": len(res), "hit_24h": hit, "next_due": nxt[0] if nxt else None,
+            "pending": len(nxt), "total_resolved": sum(1 for p in tr["preds"] if p.get("res") is not None),
+            "rules_pending": sum(1 for x in tr.get("rules_log", []) if x.get("res") is None)}
 
 
 def summary(tr, names):
@@ -296,4 +333,5 @@ def summary(tr, names):
             "per_sym": {s: {"n": a[0], "hit": round(100 * a[1] / a[0], 1), "name": names.get(s, s)}
                         for s, a in per_sym.items() if a[0] >= 5},
             "recent": [{"s": p["s"], "name": names.get(p["s"], p["s"]), "h": p["h"], "t": p["t"], "p": p["p"],
-                        "up": p["up"], "ret": p["ret"]} for p in recent]}
+                        "up": p["up"], "ret": p["ret"]} for p in recent],
+            "activity": activity(tr, now_iso=max([p["t"] for p in tr["preds"]], default=""))}

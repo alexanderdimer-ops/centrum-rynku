@@ -186,3 +186,69 @@ def insiders(sym, get):
         txt = (f"Osoby z zarządu/rady tylko sprzedawały akcje ({n_s} transakcji, {m(sell)}) w ostatnich 90 dniach. "
                "Sprzedaże bywają rutynowe (podatki, wcześniej zaplanowane), więc to słaby sygnał.")
     return {"buy": buy, "sell": sell, "buyers": len(buyers), "dir": d, "text": txt}
+
+
+def superinvestors(sym, price, get):
+    """Znani inwestorzy (fundusze typu Berkshire, Tiger Global, Appaloosa…) – dane z raportów 13F zebrane przez Dataroma.
+    Raporty są kwartalne i spóźnione ok. 45 dni, więc pokazują kierunek, a nie bieżące decyzje."""
+    s = get(f"https://www.dataroma.com/m/stock.php?sym={urllib.parse.quote(sym)}", ttl=86400).decode("utf-8", "ignore")
+    t = re.sub(r"<script.*?</script>|<style.*?</style>", "", s, flags=re.S)
+    cnt = re.search(r"Ownership count:\s*</td>\s*<td[^>]*>\s*(\d+)", t) or re.search(r"Ownership count:.*?(\d+)", re.sub(r"<[^>]+>", " ", t), re.S)
+    hold = re.search(r"Hold Price \*.*?\$([\d,.]+)", re.sub(r"<[^>]+>", " ", t), re.S)
+    rows = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
+        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        if len(cells) >= 5 and " - " in cells[1] or (len(cells) >= 5 and re.search(r"(Management|Capital|Funds|Partners|Advisors|Hathaway)", cells[1] or "")):
+            act = cells[3]
+            if re.match(r"^(Add|Reduce|Buy|Sell)", act) or act == "":
+                rows.append({"who": cells[1], "pct": cells[2], "act": act})
+    if not cnt and not rows:
+        return None
+    adds = [r for r in rows if r["act"].startswith(("Add", "Buy"))]
+    reds = [r for r in rows if r["act"].startswith(("Reduce", "Sell"))]
+    new = [r for r in rows if r["act"].startswith("Buy")]
+    hp = float(hold.group(1).replace(",", "")) if hold else None
+    n = int(cnt.group(1)) if cnt else len(rows)
+    d = 0.5 if len(adds) > len(reds) * 1.5 and adds else -0.5 if len(reds) > len(adds) * 2 and reds else 0
+    famous = [r for r in rows if re.search(r"Buffett|Ackman|Tepper|Burry|Icahn|Klarman|Li Lu|Coleman|Druckenmiller|Pabrai|Akre|Russo|Smith|Greenblatt|Loeb", r["who"])]
+    txt = (f"{n} znanych inwestorów ma te akcje w portfelu. W ostatnim kwartale {len(adds)} dokupiło"
+           + (f" (w tym {len(new)} nowych)" if new else "") + f", {len(reds)} sprzedało część.")
+    if hp:
+        txt += f" Ich średnia cena zakupu: {hp:,.2f} USD ({'+' if price >= hp else '−'}{abs(price / hp - 1) * 100:.0f}% do dziś).".replace(",", " ").replace(".", ",", 1)
+    txt += " Dane kwartalne (13F), opóźnione ok. 1,5 miesiąca."
+    def pl(act):
+        m_ = re.match(r"(Add|Reduce|Buy|Sell)\s*([\d.]*)%?", act or "")
+        if not m_:
+            return "trzyma"
+        word = {"Add": "dokupił", "Reduce": "sprzedał część", "Buy": "kupił (nowa pozycja)", "Sell": "sprzedał całość"}[m_.group(1)]
+        return word + (f" ({m_.group(2).replace('.', ',')}%)" if m_.group(2) and m_.group(1) in ("Add", "Reduce") else "")
+    return {"n": n, "adds": len(adds), "reduces": len(reds), "new": len(new), "hold": hp, "dir": d,
+            "famous": [f"{r['who'].split(' - ')[0]}: {pl(r['act'])}" for r in famous][:5],
+            "top": [f"{r['who'].split(' - ')[0]}: {pl(r['act'])}" for r in rows[:5]], "text": txt}
+
+
+def reddit_buzz(get_json):
+    """Najczęściej komentowane spółki na Reddicie (ApeWisdom). Duży szum = duże emocje i zmienność, nie gwarancja wzrostu."""
+    out = {}
+    for page in (1, 2):
+        try:
+            for r in get_json(f"https://apewisdom.io/api/v1.0/filter/all-stocks/page/{page}", ttl=3600)["results"]:
+                m0, m1 = r.get("mentions_24h_ago") or 0, r.get("mentions") or 0
+                out[r["ticker"]] = {"rank": r["rank"], "mentions": m1, "prev": m0, "rank_prev": r.get("rank_24h_ago"),
+                                    "change": (m1 / m0 - 1) if m0 else None, "name": r.get("name")}
+        except Exception as e:
+            print("Reddit pominięty:", e)
+            break
+    return out
+
+
+def buzz_text(b):
+    ch = b.get("change")
+    txt = f"Reddit: {b['mentions']} wzmianek w dobę (miejsce {b['rank']} wśród spółek)"
+    if ch is not None and ch > 0.5 and b["mentions"] >= 20:
+        txt += f", o {ch * 100:.0f}% więcej niż dzień wcześniej – rośnie zainteresowanie drobnych inwestorów. Taki szum często oznacza duże wahania w obie strony."
+    elif ch is not None and ch < -0.4:
+        txt += " – zainteresowanie słabnie."
+    else:
+        txt += "."
+    return txt

@@ -9,11 +9,62 @@ Opcjonalnie wysyła powiadomienia na telefon przez ntfy.sh (sekret NTFY_TOPIC w 
 import json, math, os, re, sys, time, hashlib, statistics as st, urllib.request, urllib.parse, datetime as dt
 import email.utils
 import xml.etree.ElementTree as ET
-import track, ml, extras, strategies, walkforward
+import track, ml, extras, strategies, walkforward, lab
 
 MODEL = {}  # wytrenowane modele uczenia maszynowego (ustawiane w głównym przebiegu)
 TRACK = {"stats": {}}  # stan samotestowania (do oceny reguł na żywo)
 FG = {}  # indeks strachu i chciwości (krypto)
+LAB = {}  # laboratorium nauki (najlepsze przepisy modelu)
+BUZZ = {}  # szum na Reddicie (ApeWisdom)
+
+
+def famous_view(sym, name, price, si, bz, verdict=None):
+    """Czy aktywność znanych inwestorów i tłumu z Reddita przemawia za zakupem – prosta ocena z uzasadnieniem."""
+    pts, why = 0.0, []
+    if si:
+        hp = si.get("hold")
+        if si["dir"] > 0:
+            if hp and price <= hp * 1.05:
+                pts += 1.5; why.append("Znani inwestorzy dokupują, a cena jest blisko ich średniej ceny zakupu – podobna „okazja” jak u nich.")
+            elif hp and price > hp * 1.2:
+                pts += 0.5; why.append(f"Znani inwestorzy dokupują, ale cena jest już {(price / hp - 1) * 100:.0f}% wyżej niż ich średni zakup – mniejsza okazja.")
+            else:
+                pts += 1.0; why.append("Więcej znanych inwestorów dokupuje niż sprzedaje.")
+        elif si["dir"] < 0:
+            pts -= 1.0; why.append("Więcej znanych inwestorów sprzedaje niż dokupuje – ostrożnie.")
+        else:
+            why.append("Znani inwestorzy nie mają wyraźnego kierunku (część kupuje, część sprzedaje).")
+        if si.get("famous"):
+            why.append("Słynne nazwiska: " + ", ".join(si["famous"][:3]) + ".")
+    if bz and bz.get("mentions", 0) >= 20:
+        ch = bz.get("change")
+        if ch is not None and ch > 1.0:
+            pts -= 0.5; why.append(f"Nagły wzrost szumu na Reddicie (+{ch * 100:.0f}% wzmianek) – często oznacza „przegrzanie” i gwałtowne wahania.")
+        elif bz["rank"] <= 10:
+            why.append(f"Bardzo popularna na Reddicie (miejsce {bz['rank']}) – emocje tłumu mogą mocno ruszać ceną.")
+    if verdict:
+        why.append(f"Ocena całej strony: {verdict}.")
+    if not why:
+        return None
+    t = ("Raczej się opłaca – warto przyjrzeć się bliżej" if pts >= 1.5 else "Lekko na plus" if pts >= 0.5 else
+         "Raczej nie – znani inwestorzy się wycofują" if pts <= -1 else "Neutralnie – sam ten sygnał nie wystarcza")
+    return {"symbol": sym, "name": name, "price": price, "score": pts, "title": t, "why": why, "si": si, "buzz": bz}
+
+
+def aggregate(H, kind, keep):
+    """Świece tygodniowe ("w") lub miesięczne ("m") z dziennych (do wykresów w dłuższej skali)."""
+    out = {"t": [], "o": [], "h": [], "l": [], "c": []}
+    key = (lambda d: d.isocalendar()[:2]) if kind == "w" else (lambda d: (d.year, d.month))
+    cur = None
+    for d, o, h, l, c in zip(H["d"], H["o"], H["h"], H["l"], H["c"]):
+        k = key(d)
+        if k != cur:
+            cur = k
+            for name, v in (("t", d.toordinal()), ("o", o), ("h", h), ("l", l), ("c", c)):
+                out[name].append(v)
+        else:
+            out["h"][-1] = max(out["h"][-1], h); out["l"][-1] = min(out["l"][-1], l); out["c"][-1] = c
+    return {k: (v[-keep:] if k == "t" else [float(f"{x:.6g}") for x in v[-keep:]]) for k, v in out.items()}
 
 
 def final_verdict(it, ex, rules_now, my_events):
@@ -37,6 +88,7 @@ def final_verdict(it, ex, rules_now, my_events):
             f"Analitycy: cena docelowa {A['upside'] * 100:+.0f}% od obecnej.")
     if "cot" in ex: add(ex["cot"]["dir"] * 0.7, "Duzi gracze (COT): " + ex["cot"]["text"][0].lower() + ex["cot"]["text"][1:])
     if "insiders" in ex and ex["insiders"]["dir"]: add(ex["insiders"]["dir"] * 0.8, ex["insiders"]["text"])
+    if "superinv" in ex and ex["superinv"]["dir"]: add(ex["superinv"]["dir"] * 0.8, "Znani inwestorzy: " + ex["superinv"]["text"])
     if "sector" in ex: add((0.4 if ex["sector"]["etf_up"] else -0.4) + (0.3 if ex["sector"]["rel_3m"] > 0.03 else -0.3 if ex["sector"]["rel_3m"] < -0.03 else 0),
                            ex["sector"]["text"])
     rv = 0.0; rtxt = []
@@ -48,6 +100,12 @@ def final_verdict(it, ex, rules_now, my_events):
         rtxt.append(f"Strategia odkryta przez stronę: {r['text']} → {'wzrost' if r['dir'] == 'up' else 'spadek'} {r['when']} "
                     f"(trafność {r['acc']:.0f}%{', potwierdzona na żywo' if st_ == 'confirmed' else ''}).")
     if rtxt: add(max(-1.5, min(1.5, rv)), rtxt[0])
+    for h_, L_ in (it.get("lab") or {}).items():
+        if L_.get("sure"):
+            up_ = L_["p"] > 50
+            hn_ = {"1d": "na jutro", "1w": "na tydzień", "1m": "na miesiąc"}[h_]
+            add(1.5 if up_ else -1.5, f"Pewny sygnał modelu z laboratorium ({hn_}): "
+                                    f"{'wzrost' if up_ else 'spadek'} – w testach na historii takie sygnały trafiały w {L_['sure_acc']:.0f}%.")
     m = it.get("ml")
     if m and m.get("w_1w"): add((m["1w"] - 50) / 10 * m["w_1w"], f"Model uczenia maszynowego: szansa wzrostu w tydzień {m['1w']:.0f}%.")
     if it["group"] == "Krypto" and FG.get("value") is not None:
@@ -1405,6 +1463,7 @@ def scan(prev_scan, own):
                         "stop": c[-1] - 2 * a, "target": c[-1] + 3 * a, "own": sym in own, "pats": pats,
                         "short": {"score": ps_[0], "plus": ps_[1], "minus": ps_[2]},
                         "long": {"score": pl_[0], "plus": pl_[1], "minus": pl_[2]},
+                        "ml": {h: mlp.get(h) for h in ("1d", "1w")} if mlp else None,
                         "spark": [float(f"{x:.6g}") for x in c[-30:]]})
         except Exception as e:
             print("Skaner pominął", sym, e)
@@ -1676,6 +1735,7 @@ def _analyze(ins, bankier, cal, vix):
 
     # uczenie maszynowe: łączymy z resztą tylko w takim stopniu, w jakim model sprawdził się w teście
     mlp = ml_predict(H, S["rc"])
+    labp = lab.predict_live(LAB, mlp["x"]) if mlp and LAB.get("live") else None
     if mlp:
         for key, h in (("overall", "1d"), ("p_week", "1w"), ("p_month", "1m")):
             a_ = mlp.get("w_" + h, 0)
@@ -1706,6 +1766,9 @@ def _analyze(ins, bankier, cal, vix):
         safe("analysts", lambda: extras.analysts(ins["symbol"], c[-1], get_json))
         safe("sector", lambda: extras.sector(ins["symbol"], H, get_json, history))
         safe("insiders", lambda: extras.insiders(ins["symbol"], get))
+        safe("superinv", lambda: extras.superinvestors(ins["symbol"], c[-1], get))
+        if ins["symbol"] in BUZZ:
+            ex["buzz"] = dict(BUZZ[ins["symbol"]], text=extras.buzz_text(BUZZ[ins["symbol"]]))
     safe("earn", lambda: extras.earnings_moves(ins, H, get_json, get))
     safe("season", lambda: extras.seasonality(ins["symbol"], get_json, chart_url))
     if "cot" in ex:
@@ -1722,6 +1785,8 @@ def _analyze(ins, bankier, cal, vix):
         d_ = (2 if Sx["etf_up"] else -2) + (2 if Sx["rel_3m"] > 0.03 else -2 if Sx["rel_3m"] < -0.03 else 0)
         pot, plus, minus = adjust((pot, plus, minus), d_, Sx["text"])
         pot_l = adjust(pot_l, d_, Sx["text"])
+    if "superinv" in ex and ex["superinv"]["dir"]:
+        pot_l = adjust(pot_l, 6 * ex["superinv"]["dir"], ex["superinv"]["text"])
     if "insiders" in ex and ex["insiders"]["dir"]:
         pot, plus, minus = adjust((pot, plus, minus), 4 * ex["insiders"]["dir"], ex["insiders"]["text"])
         pot_l = adjust(pot_l, 4 * ex["insiders"]["dir"], ex["insiders"]["text"])
@@ -1772,7 +1837,7 @@ def _analyze(ins, bankier, cal, vix):
             "summary": describe(ins, lv, pf, rs, ref_info, week, bt, risk, setups)
                        + [v["text"] for k, v in ex.items() if v.get("text") and k != "season"]
                        + ([ex["season"]["text"]] if ex.get("season", {}).get("text") else []),
-            "extras": ex, "ml": mlp, "live_x": live_x, "strategies": strat,
+            "extras": ex, "ml": mlp, "live_x": live_x, "strategies": strat, "lab": labp,
             "vol_ratio": (H["v"][-1] / mean(H["v"][-21:-1])) if H["v"][-1] and mean(H["v"][-21:-1]) > 0 else None,
             "plan": plan, "levels": lv, "rsi": rs, "perf": pf,
             "today_vs_typical": abs(change) / lv["sd60"] if lv["sd60"] else None,
@@ -1790,6 +1855,7 @@ def _analyze(ins, bankier, cal, vix):
                      "l": [float(f"{x:.6g}") for x in H["l"][-K:]], "c": [float(f"{x:.6g}") for x in c[-K:]],
                      "dd": [d.toordinal() - t0 for d in days[-K:]]},
             "patterns": pats, "pattern_stats": pstats, "pattern_base": pbase,
+            "agg": {"w": aggregate(H, "w", 156), "m": aggregate(H, "m", 60)},
             "hist": {"t0": t0, "dd": [d.toordinal() - t0 for d in days], "c": [float(f"{x:.6g}") for x in c]}}
 
 
@@ -1846,6 +1912,10 @@ if __name__ == "__main__":
     cal = calendar(instruments, (prev or {}).get("calendar", []))
     TRACK.update(track.load())
     try:
+        BUZZ.update(extras.reddit_buzz(get_json))
+    except Exception as e:
+        print("Reddit pominięty:", e)
+    try:
         fg = get_json("https://api.alternative.me/fng/?limit=1", ttl=3600)["data"][0]
         FG.update(value=int(fg["value"]), label={"Extreme Fear": "skrajny strach", "Fear": "strach", "Neutral": "neutralnie",
                                                  "Greed": "chciwość", "Extreme Greed": "skrajna chciwość"}.get(fg["value_classification"], fg["value_classification"]))
@@ -1864,7 +1934,13 @@ if __name__ == "__main__":
     need_replay = not replay or (NOW - dt.datetime.fromisoformat(replay.get("time", "2000-01-01T00:00:00+00:00"))).days >= 7 \
         or set(replay.get("per_sym", {})) - {i["symbol"] for i in instruments} or \
         {i["symbol"] for i in instruments} - set(replay.get("per_sym", {}))
-    if need_model or need_replay:
+    try:
+        LAB.update(json.load(open("lab.json", encoding="utf-8")))
+    except Exception:
+        pass
+    last_exp = max((e["time"] for e in LAB.get("experiments", [])), default="2000-01-01T00:00:00+00:00")
+    need_lab = NOW - dt.datetime.fromisoformat(last_exp) > dt.timedelta(minutes=50)
+    if need_model or need_replay or need_lab:
         prepped = []
         syms = {i["symbol"]: i.get("ref") for i in instruments}
         for s_ in UNIVERSE:
@@ -1879,6 +1955,16 @@ if __name__ == "__main__":
         if need_model:
             old_model = ml.train([(a, b) for a, b, _ in prepped], today)
             print("Wytrenowano model uczenia maszynowego na", len(prepped), "instrumentach")
+        if need_lab:  # laboratorium: kolejne eksperymenty (ok. 35 s każdy)
+            try:
+                before = {h: b["id"] for h, b in LAB.get("best", {}).items()}
+                new_e = lab.step(LAB, prepped, NOW, budget=int(os.environ.get("LAB_BUDGET", "2")))
+                print("Laboratorium: wykonano", len(new_e), "eksperymentów, łącznie", len(LAB["experiments"]))
+                if before != {h: b["id"] for h, b in LAB.get("best", {}).items()} or LAB.get("live_date") != today:
+                    lab.train_live(LAB, prepped, NOW)
+                json.dump(LAB, open("lab.json", "w", encoding="utf-8"), ensure_ascii=False)
+            except Exception as e:
+                print("Laboratorium pominięte:", e)
         if need_replay:  # „gra w przewidywanie” na historii – raz w tygodniu (albo po zmianie listy)
             try:
                 replay = walkforward.run(prepped, {i["symbol"] for i in instruments})
@@ -1948,11 +2034,27 @@ if __name__ == "__main__":
                 tr["weekly_sent"] = wk
             except Exception as e:
                 print("Raport tygodniowy nieudany:", e)
+    famous = []
+    for it in items:
+        ex_ = it.get("extras") or {}
+        if "superinv" in ex_ or "buzz" in ex_:
+            fv = famous_view(it["symbol"], it["name"], it["price"], ex_.get("superinv"), ex_.get("buzz"), it["final"]["title"])
+            if fv: famous.append(dict(fv, own=True))
+    for x in [x for x in sc["items"] if x["group"] == "Akcje USA" and x["symbol"] not in {i["symbol"] for i in items}][:15]:
+        try:
+            si = extras.superinvestors(x["symbol"], x["price"], get)
+        except Exception:
+            si = None
+        bz = BUZZ.get(x["symbol"])
+        fv = famous_view(x["symbol"], x["name"], x["price"], si, dict(bz, text=extras.buzz_text(bz)) if bz else None,
+                         f"potencjał {x['score']}/100")
+        if fv: famous.append(dict(fv, own=False))
+    hot = sorted(([t, b] for t, b in BUZZ.items() if b.get("change") is not None and b["mentions"] >= 30), key=lambda tb: -tb[1]["mentions"])[:10]
     allr = [dict(r, sym=it["symbol"], name=it["name"]) for it in items for r in (it.get("strategies") or {}).get("rules", [])]
     strat_sum = {"tested": sum((it.get("strategies") or {}).get("tested", 0) for it in items), "found": len(allr),
                  "ok": sum(r["status"] == "ok" for r in allr), "fail": sum(r["status"] == "fail" for r in allr),
                  "best": sorted([r for r in allr if r["status"] == "ok"], key=lambda r: -(r["test"][1] or 0))[:12]}
-    names = {i["symbol"]: i["name"] for i in items} | {x["symbol"]: x["name"] for x in sc["items"]}
+    names = {x["symbol"]: x["name"] for x in sc["items"]} | {i["symbol"]: i["name"] for i in items}
     tr = track.update(tr, NOW, items, sc["items"], {h: picks[h] for h in ("short", "mid", "long")})
     for h in ("1d", "1w", "1m"):
         if old_model.get(h) and old_model.get("date") == today and not any(today in x["t"] and "Model uczenia" in x["text"] for x in tr.get("log", [])):
@@ -1969,6 +2071,12 @@ if __name__ == "__main__":
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items,
                    "changes": changes, "scan": sc, "world": world, "picks": picks, "strat": strat_sum, "replay": replay,
+                   "famous": sorted(famous, key=lambda f_: -f_["score"]),
+                   "buzz_hot": [{"t": t, **b, "text": extras.buzz_text(b)} for t, b in hot],
+                   "lab": {"n": len(LAB.get("experiments", [])), "total": len(lab.all_configs()),
+                           "best": {h: {k: b[k] for k in ("text", "res", "time", "score")} for h, b in LAB.get("best", {}).items()},
+                           "progress": LAB.get("progress", [])[-200:], "log": LAB.get("log", [])[-30:][::-1],
+                           "recent": [{k: e[k] for k in ("text", "res", "time", "score")} for e in LAB.get("experiments", [])[-12:][::-1]]},
                    "fg_crypto": FG or None,
                    "track": track.summary(tr, names),
                    "ml": {"date": old_model.get("date"), "live": old_model.get("live", {}).get("summary"),

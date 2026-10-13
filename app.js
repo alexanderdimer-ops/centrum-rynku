@@ -136,22 +136,45 @@ function tWykres(it){const L=it.levels,P=it.perf,h100=x=>x==null?null:x*100,tvt=
   ...(L.sma200!=null?[["Średnia 200 dni",fmt(L.sma200),ma(L.sma200)]]:[]),
   ["Roczny szczyt / dołek",`${fmt(L.hi52)} / ${fmt(L.lo52)}`,""]]
   .map(([k,v,h])=>`<dt>${k}</dt><dd>${v}</dd>${h?`<small>${h}</small>`:""}`).join("");
- $("tab").innerHTML=`${storyBox(it)}<section class="box"><div class="seg" role="group" aria-label="Okres wykresu" style="margin-bottom:10px">${RANGES.filter(r=>r[0]!=="1D"||it.intra).map(r=>`<button data-r="${r[0]}" aria-pressed="${r[0]===range}">${r[1]}</button>`).join("")}</div>
+ $("tab").innerHTML=`${storyBox(it)}<section class="box"><div class="seg" role="group" aria-label="Okres wykresu" style="margin-bottom:10px"${tf!=="d"?" hidden":""}>${RANGES.filter(r=>r[0]!=="1D"||it.intra).map(r=>`<button data-r="${r[0]}" aria-pressed="${r[0]===range}">${r[1]}</button>`).join("")}</div>
   <div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="small mut" id="rch"></div>
-  <div class="seg" role="group" aria-label="Rodzaj wykresu"><button data-cm="line" aria-pressed="${chartMode==="line"}">Linia</button><button data-cm="cnd" aria-pressed="${chartMode==="cnd"}">Świece</button></div><button class="btn sm" data-annon aria-pressed="${annOn}">Objaśnienia na wykresie</button></div>
+  <div class="seg" role="group" aria-label="Rodzaj wykresu"><button data-cm="line" aria-pressed="${chartMode==="line"}">Linia</button><button data-cm="cnd" aria-pressed="${chartMode==="cnd"}">Świece</button></div><div class="seg" role="group" aria-label="Interwał świec">${Object.entries(TFN).map(([k,l])=>`<button data-tf="${k}" aria-pressed="${k===tf}">${l}</button>`).join("")}</div><button class="btn sm" data-annon aria-pressed="${annOn}">Objaśnienia na wykresie</button></div>
   <div class="chartwrap" id="cw"></div>
   <div class="legend" id="lg"><span><i></i>opór ${fmt(L.R)} i wsparcie ${fmt(L.S)} – szczyt i dołek z ostatnich 20 sesji</span></div>
-  <div id="annleg" class="cfoot" style="margin-top:8px"></div><div id="cinfo"></div></section>
+  <div id="annleg" class="cfoot" style="margin-top:8px"></div>${TREND_NOTE}<div id="cinfo"></div></section>
  <section class="box" id="patbox"></section>
  <div class="two"><section class="box"><h3>Teraz – zmiany ceny</h3><div class="tiles">${tiles}</div></section>
  <section class="box"><h3>Ważne poziomy</h3><dl class="kv">${kv}</dl></section></div>`}
+// ---------- TRENDY NA WYKRESIE ----------
+let tf=store.get("tf","d");
+const TFN={d:"Dzienne",w:"Tygodniowe",m:"Miesięczne"};
+function trendSide(c,n){const out=new Array(c.length).fill(0);let sum=0;const sma=new Array(c.length).fill(null);
+ for(let i=0;i<c.length;i++){sum+=c[i];if(i>=n)sum-=c[i-n];if(i>=n-1)sma[i]=sum/n}
+ for(let i=0;i<c.length;i++){if(sma[i]==null||i<3||sma[i-3]==null)continue;const r=sma[i]>sma[i-3];out[i]=c[i]>sma[i]&&r?1:c[i]<sma[i]&&!r?-1:0}
+ // wygładzenie: krótkie przerwy (1–2 świece) nie przerywają trendu
+ for(let i=2;i<c.length;i++)if(out[i]!==out[i-1]&&out[i-1]!==out[i-2]&&out[i]===out[i-2])out[i-1]=out[i];
+ return out}
+function trendSegs(side,c,from,to){const segs=[];let a=from;
+ for(let i=from+1;i<=to+1;i++){if(i>to||side[i]!==side[a]){segs.push({a,b:i-1,side:side[a],ch:(c[i-1]/c[Math.max(0,a-1)]-1)*100});a=i}}
+ return segs.filter(g=>g.b-g.a>=2||g.b===to)}
+function trendSvg(segs,X,step,pt,ih,off){let g="";segs.forEach(sg=>{if(!sg.side)return;const x1=X(sg.a-off)-step/2,x2=X(sg.b-off)+step/2,col=sg.side>0?"var(--up)":"var(--down)";
+ g+=`<rect x="${x1}" y="${pt}" width="${Math.max(1,x2-x1)}" height="${ih}" fill="${col}" opacity=".09"/><rect x="${x1}" y="${pt}" width="${Math.max(1,x2-x1)}" height="3" fill="${col}" opacity=".8"/>`;
+ if(x2-x1>46)g+=`<text x="${(x1+x2)/2}" y="${pt+16}" fill="${col}" font-size="11.5" font-weight="700" text-anchor="middle">${sg.side>0?"▲":"▼"} ${pct(sg.ch,1)}</text>`});return g}
+function trendNow(segs,dateOf){if(!segs.length)return "";const lastS=segs[segs.length-1];
+ const sig=[...segs].reverse().find(x=>x.b-x.a>=2&&x.side!==0)||lastS,g=sig,fresh=g===lastS;
+ if(!fresh){const t=g.side>0?`<b class="up">wzrostowy</b>`:`<b class="down">spadkowy</b>`;
+  return `<div class="tnow">Ostatni wyraźny trend: ${t} od ${dateOf(g.a)} do ${dateOf(g.b)} (${pct(g.ch,1)}). <span class="midc">Teraz ruch bez wyraźnego kierunku – czekamy na potwierdzenie.</span></div>`}
+ const t=g.side>0?`<b class="up">TREND WZROSTOWY</b>`:g.side<0?`<b class="down">TREND SPADKOWY</b>`:`<b class="midc">BRAK WYRAŹNEGO TRENDU</b>`;
+ return `<div class="tnow">Teraz: ${t} od ${dateOf(g.a)} (${pct(g.ch,1)}, ${g.b-g.a+1} ${tf==="d"?"sesji":tf==="w"?"tyg.":"mies."})</div>`}
+const TREND_NOTE=`<p class="note" style="margin:6px 0 0">Zielone pasy = trend wzrostowy (cena nad rosnącą średnią), czerwone = spadkowy (cena pod opadającą średnią), bez koloru = ruch w bok. Liczba nad pasem to zmiana ceny w czasie trwania trendu.</p>`;
+
 function series(it){
  if(range==="1D"&&it.intra){const I=it.intra;return {xs:I.t.map(t=>t*1000),ys:I.c,base:I.prev||I.c[0],intra:true}}
  const H=it.hist,R=RANGES.find(r=>r[0]===range)||RANGES[3],last=H.dd[H.dd.length-1];let s=0;
  for(let i=0;i<H.dd.length;i++)if(H.dd[i]<=last-R[2])s=i;
  const xs=H.dd.slice(s).map(o=>dayDate(H.t0+o).getTime()),ys=H.c.slice(s);return {xs,ys,base:ys[0],long:R[2]>182}}
 function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.intra)range="1M";if($("annleg"))$("annleg").innerHTML="";
- if(chartMode==="cnd"&&range!=="5L")return drawCandles(it);
+ if(chartMode==="cnd"&&(range!=="5L"||tf!=="d"))return drawCandles(it);
  const S=series(it),w=wrap.clientWidth||600,h=w<500?220:280,pl=6,pr=62,pt=10,pb=24,iw=w-pl-pr,ih=h-pt-pb;
  const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range);
  let mn=Math.min(...S.ys,S.intra?S.base:Infinity),mx=Math.max(...S.ys,S.intra?S.base:-Infinity);if(showLv){mn=Math.min(mn,L.S);mx=Math.max(mx,L.R)}
@@ -164,14 +187,17 @@ function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.i
  const xl=[0,Math.floor((S.xs.length-1)/2),S.xs.length-1].map((i,j)=>`<text x="${X(i)}" y="${h-6}" fill="var(--dim)" font-size="11" text-anchor="${["start","middle","end"][j]}">${lab(i)}</text>`).join("");
  const lv=showLv?[L.R,L.S].map(v=>`<line x1="${pl}" x2="${pl+iw}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--mut)" stroke-dasharray="5 4" stroke-width="1.2"/>`).join(""):"";
  const baseLine=S.intra?`<line x1="${pl}" x2="${pl+iw}" y1="${Y(S.base)}" y2="${Y(S.base)}" stroke="var(--dim)" stroke-dasharray="2 4"/>`:"";
+ let tsvg="",tnow="";
+ if(!S.intra){const H=it.hist,side=trendSide(H.c,20),off=H.c.length-S.ys.length,segs=trendSegs(side,H.c,off,H.c.length-1);
+  const stp=iw/Math.max(1,S.ys.length-1),Xi=i=>X(i);tsvg=trendSvg(segs,Xi,stp,pt,ih,off);tnow=trendNow(segs,i=>dlabel(dayDate(H.t0+H.dd[i]),true))}
  wrap.innerHTML=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Wykres ceny ${esc(it.name)}">
   <defs><linearGradient id="ga" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${hex}" stop-opacity=".22"/><stop offset="1" stop-color="${hex}" stop-opacity="0"/></linearGradient></defs>
-  ${grid}${lv}${baseLine}<path d="${path}L${X(S.ys.length-1)} ${pt+ih}L${X(0)} ${pt+ih}Z" fill="url(#ga)"/>
+  ${grid}${tsvg}${lv}${baseLine}<path d="${path}L${X(S.ys.length-1)} ${pt+ih}L${X(0)} ${pt+ih}Z" fill="url(#ga)"/>
   <path d="${path}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>${xl}
   <g id="hov" style="display:none"><line id="hl" y1="${pt}" y2="${pt+ih}" stroke="var(--mut)"/><circle id="hc" r="5" fill="${col}" stroke="var(--card)" stroke-width="2"/></g>
   <rect x="${pl}" y="${pt}" width="${iw}" height="${ih}" fill="transparent" id="hit"/></svg><div class="tip" id="tip"></div>`;
  const ch=(last/S.base-1)*100;
- $("rch").innerHTML=`${S.intra?"Zmiana od wczorajszego zamknięcia":"Zmiana w wybranym okresie"}: <b class="${sgn(ch)}">${pct(ch)}</b>${S.intra?` · ostatnia cena o ${hm(new Date(x1))}`:""}`;
+ $("rch").innerHTML=`${tnow}${S.intra?"Zmiana od wczorajszego zamknięcia":"Zmiana w wybranym okresie"}: <b class="${sgn(ch)}">${pct(ch)}</b>${S.intra?` · ostatnia cena o ${hm(new Date(x1))}`:""}`;
  $("lg").style.display=showLv?"":"none";
  const hit=$("hit"),tip=$("tip"),hov=$("hov");
  const move=e=>{const r=hit.getBoundingClientRect(),x=e.clientX-r.left;let best=0,bd=1e9;
@@ -184,11 +210,16 @@ function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.i
  hit.addEventListener("pointerleave",()=>{hov.style.display="none";tip.style.display="none"})}
 
 function candleData(it){
+ if(tf!=="d"&&it.agg){const A=it.agg[tf],keep=tf==="w"?104:60,s=Math.max(0,A.c.length-keep),side=trendSide(A.c,tf==="w"?10:6);
+  return {t:A.t.slice(s).map(o=>dayDate(o).getTime()),o:A.o.slice(s),h:A.h.slice(s),l:A.l.slice(s),c:A.c.slice(s),intra:false,pats:[],long:true,agg:true,
+   tside:side,tc:A.c,toff:s,tdate:i=>dlabel(dayDate(A.t[i]),true)}}
  if(range==="1D"&&it.intra&&it.intra.cnd){const C=it.intra.cnd;return {t:C.t.map(x=>x*1000),o:C.o,h:C.h,l:C.l,c:C.c,intra:true,pats:[]}}
  const O=it.ohlc,R=RANGES.find(r=>r[0]===range)||RANGES[3],last=O.dd[O.dd.length-1];let s=0;
  for(let i=0;i<O.dd.length;i++)if(O.dd[i]<=last-R[2])s=i;if(range==="1T")s=Math.max(0,O.dd.length-6);
  const pats=(it.patterns||[]).filter(p=>p.i>=s).map(p=>({i:p.i-s,key:p.key}));
- return {t:O.dd.slice(s).map(o=>dayDate(it.hist.t0+o).getTime()),o:O.o.slice(s),h:O.h.slice(s),l:O.l.slice(s),c:O.c.slice(s),intra:false,pats,long:R[2]>182,s0:s}}
+ const H=it.hist,hoff=H.c.length-O.c.length;
+ return {t:O.dd.slice(s).map(o=>dayDate(it.hist.t0+o).getTime()),o:O.o.slice(s),h:O.h.slice(s),l:O.l.slice(s),c:O.c.slice(s),intra:false,pats,long:R[2]>182,s0:s,
+  tside:trendSide(H.c,20),tc:H.c,toff:hoff+s,tdate:i=>dlabel(dayDate(H.t0+H.dd[i]),true)}}
 function drawCandles(it){const wrap=$("cw"),S=candleData(it),n=S.c.length,w=wrap.clientWidth||600,h=w<500?240:300,pl=6,pr=62,pt=14,pb=24,iw=w-pl-pr,ih=h-pt-pb;
  const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range)&&!(annOn&&it.chart);
  let mn=Math.min(...S.l),mx=Math.max(...S.h);if(showLv&&!(annOn&&it.chart)){mn=Math.min(mn,L.S);mx=Math.max(mx,L.R)}const pad=(mx-mn)*0.1||1;mn-=pad;mx+=pad;
@@ -198,26 +229,28 @@ function drawCandles(it){const wrap=$("cw"),S=candleData(it),n=S.c.length,w=wrap
  const lv=showLv?[L.R,L.S].map(v=>`<line x1="${pl}" x2="${pl+iw}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--mut)" stroke-dasharray="5 4" stroke-width="1.2"/>`).join(""):"";
  let body="";for(let i=0;i<n;i++){const up=S.c[i]>=S.o[i],col=up?"var(--up)":"var(--down)",x=X(i),y1=Y(Math.max(S.o[i],S.c[i])),y2=Y(Math.min(S.o[i],S.c[i]));
   body+=`<line x1="${x}" x2="${x}" y1="${Y(S.h[i])}" y2="${Y(S.l[i])}" stroke="${col}" stroke-width="1"/><rect x="${x-bw/2}" y="${y1}" width="${bw}" height="${Math.max(1,y2-y1)}" fill="${col}" rx="1"/>`}
- const byI={};S.pats.filter(p=>!annOn||p.i>=n-20).forEach(p=>(byI[p.i]=byI[p.i]||[]).push(p.key));
+ const byI={};S.pats.filter(p=>p.i>=n-20).forEach(p=>(byI[p.i]=byI[p.i]||[]).push(p.key));
  let marks="";Object.entries(byI).forEach(([i,keys])=>{i=+i;const d=keys.map(k=>PAT[k].d),dir=d.includes("up")&&!d.includes("down")?"up":d.includes("down")&&!d.includes("up")?"down":"neutral",x=X(i);
   marks+=dir==="up"?`<path d="M${x} ${Y(S.l[i])+6}l-4 7h8z" fill="var(--up)"/>`:dir==="down"?`<path d="M${x} ${Y(S.h[i])-6}l-4 -7h8z" fill="var(--down)"/>`:`<circle cx="${x}" cy="${Y(S.h[i])-8}" r="2.5" fill="var(--mid)"/>`});
  const lab=i=>S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),S.long);
  const xl=[0,Math.floor((n-1)/2),n-1].map((i,j)=>`<text x="${X(i)}" y="${h-6}" fill="var(--dim)" font-size="11" text-anchor="${["start","middle","end"][j]}">${lab(i)}</text>`).join("");
- const ann=annSvg(it,S,X,Y,step,pt,ih,pl,iw,S.s0||0);
- wrap.innerHTML=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Wykres świecowy ${esc(it.name)}">${grid}${lv}${ann}${body}${marks}
+ const ann=S.agg?"":annSvg(it,S,X,Y,step,pt,ih,pl,iw,S.s0||0);
+ let tsvg="",tnow="";
+ if(S.tside){const segs=trendSegs(S.tside,S.tc,S.toff,S.toff+n-1);tsvg=trendSvg(segs,i=>X(i),step,pt,ih,S.toff);tnow=trendNow(segs,S.tdate)}
+ wrap.innerHTML=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Wykres świecowy ${esc(it.name)}">${grid}${tsvg}${lv}${ann}${body}${marks}
   <rect id="csel" x="${X(selCandle)-step/2}" y="${pt}" width="${step}" height="${ih}" fill="var(--ink)" opacity=".07"/>${xl}
   <rect x="${pl}" y="${pt}" width="${iw}" height="${ih}" fill="transparent" id="hit"/></svg><div class="tip" id="tip"></div>`;
  const ch=(S.c[n-1]/(S.intra&&it.intra.prev?it.intra.prev:S.o[0])-1)*100;
- $("rch").innerHTML=`${S.intra?"Świece 15-minutowe · zmiana od wczoraj":"Świece dzienne · zmiana w okresie"}: <b class="${sgn(ch)}">${pct(ch)}</b>`;
+ $("rch").innerHTML=`${tnow}${S.intra?"Świece 15-minutowe · zmiana od wczoraj":`Świece ${TFN[tf].toLowerCase()} · zmiana w okresie`}: <b class="${sgn(ch)}">${pct(ch)}</b>`;
  $("lg").style.display=showLv?"":"none";
  const hit=$("hit"),tip=$("tip"),idx=e=>Math.max(0,Math.min(n-1,Math.floor((e.clientX-hit.getBoundingClientRect().left)/step)));
- hit.addEventListener("pointermove",e=>{const i=idx(e),x=X(i);tip.innerHTML=`${S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),true)}<br>O ${fmt(S.o[i])} · H ${fmt(S.h[i])}<br>L ${fmt(S.l[i])} · C <b>${fmt(S.c[i])}</b>`;
+ hit.addEventListener("pointermove",e=>{const i=idx(e),x=X(i);tip.innerHTML=`${S.intra?hm(new Date(S.t[i])):(tf==="w"?"tydzień od ":tf==="m"?"miesiąc od ":"")+dlabel(new Date(S.t[i]),true)}<br>O ${fmt(S.o[i])} · H ${fmt(S.h[i])}<br>L ${fmt(S.l[i])} · C <b>${fmt(S.c[i])}</b>`;
   tip.style.display="block";const tw=tip.offsetWidth;tip.style.left=Math.min(Math.max(x-tw/2,0),w-tw)+"px";tip.style.top="0px"});
  hit.addEventListener("pointerleave",()=>tip.style.display="none");
  hit.addEventListener("click",e=>{selCandle=idx(e);$("csel").setAttribute("x",X(selCandle)-step/2);candleInfo(it,S,selCandle)});
  const keys=[...new Set([...ann.matchAll(/data-ann="(\w+)"(?: data-ap="([\d.]+)")?/g)].map(m=>m[1]+"|"+(m[2]||"")))];
  $("annleg").innerHTML=keys.length?`<span class="small mut">Na wykresie:</span>`+keys.map(k=>{const [a,p]=k.split("|");return `<button class="chip" data-annk="${a}" data-ap="${p}">${ANN[a].n}${p?" "+fmt(+p):""}</button>`}).join(""):(S.intra?"":`<span class="small mut">${annOn?"Brak wyraźnych formacji w tym okresie – spróbuj dłuższego okresu (np. 6 mies.).":"Włącz „Objaśnienia na wykresie”, żeby zobaczyć poziomy i formacje."}</span>`);
- candleInfo(it,S,selCandle);patternList(it,S)}
+ candleInfo(it,S,selCandle);if(S.agg){$("patbox").innerHTML=`<h3>Jak czytać ${tf==="w"?"świece tygodniowe":"świece miesięczne"}</h3><p class="small">Każda świeca to ${tf==="w"?"cały tydzień":"cały miesiąc"} handlu: otwarcie na początku, zamknięcie na końcu okresu. Taki wykres pokazuje „duży obraz” – długie trendy są na nim lepiej widoczne niż na wykresie dziennym, a pojedyncze nerwowe dni znikają.</p>${TREND_NOTE}`}else patternList(it,S)}
 function patInfo(it,key){const P=PAT[key],st=(it.pattern_stats||{})[key],b=it.pattern_base;
  return `<div class="pat"><b class="${DIRCLS[P.d]}">${P.n}</b> <span class="chip">${P.d==="up"?"sygnał wzrostowy":P.d==="down"?"sygnał spadkowy":"niezdecydowanie"}</span>
  <p><b>Jak wygląda:</b> ${P.what}</p><p><b>Co oznacza:</b> ${P.mean}</p><p><b>Dlaczego tak się dzieje:</b> ${P.why}</p>
@@ -560,6 +593,7 @@ function viewTeraz(){
  ${top.length?`<div class="grid">${top.slice(0,6).map(oppCard).join("")}</div>`:`<div class="msg">W tej chwili nic nie ma wyraźnie dobrego układu. Najlepszą decyzją bywa poczekać – brak transakcji to też pozycja.</div>`}
  ${risky?`<p class="note">Pominięto ${risky} instrumentów z bardzo wysokim ryzykiem – mają dobry układ, ale są zbyt zmienne dla początkującego.</p>`:""}
  ${warn.length?`<h3 style="margin:18px 0 10px">Na co uważać wśród ulubionych</h3><section class="box"><ul class="clean nlist">${warn.map(it=>`<li><span class="dotc" style="background:var(--down)"></span><span><a href="#i=${encodeURIComponent(it.symbol)}"><b>${esc(it.name)}</b></a> – ${esc(it.decision.title)}. ${esc((it.potential.minus[0]||it.decision.reasons[0]||""))}</span></li>`).join("")}</ul></section>`:""}
+ ${famousBox()}
  <h3 style="margin:18px 0 10px">Najważniejsze wiadomości ze świata</h3>
  <section class="box">${((D.world||{}).items||[]).length?`<ul class="clean nlist">${D.world.items.slice(0,10).map(n=>newsLi(n).replace("</span></span></li>",`${n.names&&n.names.length?` · dotyczy: ${n.names.map(esc).join(", ")}`:""}</span></span></li>`)).join("")}</ul>`:`<p class="note">Brak świeżych wiadomości z wiarygodnych źródeł.</p>`}
  <p class="note">Tylko z najbardziej wiarygodnych źródeł (Reuters, Bloomberg, CNBC, WSJ, FT, Yahoo Finance, PAP, Bankier i in.), z ostatnich 2 dni. Opis wpływu na cenę jest automatyczny.</p></section>`;
@@ -579,6 +613,8 @@ function refresh(){loadData().then(d=>{if(!D||d.updated===D.updated)return;
  const fresh=(d.changes||[]).filter(c=>!old.has(c.time+c.symbol+c.kind)&&fav.includes(c.symbol));
  const busy=document.activeElement&&/INPUT|SELECT/.test(document.activeElement.tagName)||/\/kalkulator$/.test(location.hash);
  resolveTests();if(!busy)route();updBadge();
+ const ra=((d.track||{}).activity||{}).total_resolved||0,rb=store.get("seenResolved",0);
+ if(ra>rb){store.set("seenResolved",ra);if(rb)setTimeout(()=>toast(`Strona sprawdziła ${ra-rb} nowych przewidywań – zobacz <a href="#wyniki">Wyniki</a>.`),9500)}
  toast(fresh.length?`<b>Nowe dane – ${fresh.length} ${fresh.length===1?"zmiana":"zmiany"} w ulubionych:</b><br>${fresh.slice(0,3).map(c=>`${esc(c.name)}: ${esc(c.text)}`).join("<br>")}`:`Zaktualizowano dane (${hm(new Date(d.updated))}).`);
  if(fresh.length&&"Notification" in window&&Notification.permission==="granted")fresh.slice(0,3).forEach(c=>new Notification(c.name+" – Centrum rynku",{body:c.text}))}).catch(()=>{})}
 setInterval(refresh,2*60*1000);
@@ -626,7 +662,7 @@ function viewWyniki(){resolveTests();const T=D.track||{},HT=D.hist_test||{},P=T.
  const hs=HT.signal,he=HT.every;
  $("app").innerHTML=`<div class="upd">${updTxt()}</div><h2 style="margin:4px 0 6px">Wyniki – czy strona ma rację?</h2>
  <p class="note" style="margin:0 0 12px">Strona sama, bez Twojego udziału, zapisuje swoje przewidywania dla wszystkich instrumentów i po czasie sprawdza, czy się sprawdziły. Otwiera też wirtualne transakcje, gdy mówi „Możesz rozważyć wejście”. Na tej podstawie sama się poprawia: koryguje szanse i zaostrza wymagania, gdy jej propozycje wychodzą słabo.</p>
- ${learnBox()}${replayBox()}${portfolioBox()}
+ ${statusBox()}${learnBox()}${labBox()}${recentBox()}${replayBox()}${portfolioBox()}
  <section class="box"><h3>Trafność przewidywań kierunku (na żywo)</h3><div class="tiles">${tile("Za 4 godziny",P["4h"],"pierwsze po 4 godz.")}${tile("Za 1 dzień",P["1d"],"pierwsze jutro")}${tile("Za tydzień",P["1w"],"pierwsze za tydzień")}${tile("Za miesiąc",P["1m"],"pierwsze za miesiąc")}</div>
   <p class="note">Trafność = jak często strona dobrze wskazała kierunek (wzrost/spadek). 50% to rzut monetą. Czeka na sprawdzenie: ${T.pending||0} przewidywań.</p>
   ${bins?`<details><summary class="small">Kalibracja – czy „szansa 60%” naprawdę oznacza 60%?</summary><table class="fc"><thead><tr><th>Horyzont</th><th>&lt;45%</th><th>45–50%</th><th>50–55%</th><th>55–60%</th><th>60%+</th></tr></thead><tbody>${bins}</tbody></table><p class="note">W komórkach: jak często cena naprawdę rosła przy takiej podanej szansie (w nawiasie liczba przypadków). Gdy uzbiera się ≥30 przypadków, strona sama koryguje podawane szanse.</p></details>`:""}</section>
@@ -661,7 +697,7 @@ const ANN={res:{n:"Opór",t:"Poziom, przy którym cena kilka razy zawracała w d
  buyers:{n:"Przewaga kupujących",t:"Zielone tło: cena jest nad rosnącą średnią z 20 dni – kupujący mają kontrolę."},
  sellers:{n:"Przewaga sprzedających",t:"Czerwone tło: cena jest pod opadającą średnią z 20 dni – sprzedający mają kontrolę."}};
 function annSvg(it,S,X,Y,step,pt,ih,pl,iw,s0){const A=it.chart;if(!A||!annOn||S.intra)return "";const n=S.c.length,inv=i=>i-s0,vis=i=>i>=0&&i<n;let g="";
- A.regime.forEach(r=>{const a=Math.max(0,inv(r.from)),b=Math.min(n-1,inv(r.to));if(b<0||a>n-1||b<a)return;
+ [].forEach(r=>{const a=Math.max(0,inv(r.from)),b=Math.min(n-1,inv(r.to));if(b<0||a>n-1||b<a)return;
   g+=`<rect data-ann="${r.side>0?"buyers":"sellers"}" x="${X(a)-step/2}" y="${pt}" width="${(b-a+1)*step}" height="${ih}" fill="var(--${r.side>0?"up":"down"})" opacity=".07"/>`});
  A.levels.forEach(l=>{const y=Y(l.price);if(y<pt||y>pt+ih)return;const col=l.kind==="res"?"var(--down)":"var(--up)";
   g+=`<g data-ann="${l.kind}" data-ap="${l.price}" style="cursor:pointer"><line x1="${pl}" x2="${pl+iw}" y1="${y}" y2="${y}" stroke="${col}" stroke-width="1.3" stroke-dasharray="6 4" opacity=".85"/>
@@ -692,6 +728,8 @@ function extrasBox(it){const X=it.extras||{};const rows=[];
  if(X.analysts){const A=X.analysts;rows.push(["Prognozy analityków (12 mies.)",`${esc(A.text)} Najniższa ${fmt(A.low)} USD, najwyższa ${fmt(A.high)} USD. <span class="dim">Źródło: Nasdaq.</span>`])}
  if(X.cot)rows.push(["Pozycje dużych graczy (COT)",`${esc(X.cot.text)} <span class="dim">Raport CFTC z ${esc(X.cot.date)}${X.cot.name.includes("WTI")?"; dla ropy Brent używamy raportu ropy WTI":""}.</span>`]);
  if(X.sector)rows.push(["Branża",esc(X.sector.text)]);
+ if(X.superinv)rows.push(["Znani inwestorzy",`${esc(X.superinv.text)}${X.superinv.famous&&X.superinv.famous.length?` Słynne nazwiska: ${X.superinv.famous.map(esc).join(", ")}.`:""} <span class="dim">Źródło: Dataroma (raporty 13F).</span>`]);
+ if(X.buzz)rows.push(["Reddit",esc(X.buzz.text)]);
  if(X.insiders)rows.push(["Transakcje zarządu",`${esc(X.insiders.text)} <span class="dim">Źródło: raporty SEC (OpenInsider).</span>`]);
  if(X.earn)rows.push(["Reakcje na poprzednie wyniki",`${esc(X.earn.text)}<br>${X.earn.items.map(e=>`${new Date(e.date).toLocaleDateString("pl-PL")}: <b class="${sgn(e.move)}">${pct(e.move*100)}</b>${e.surprise!=null?` (zysk ${e.surprise>=0?"lepszy":"gorszy"} od prognoz o ${fmt(Math.abs(e.surprise),1)}%)`:""}`).join(" · ")}`]);
  if(X.season&&X.season.text)rows.push(["Sezonowość miesięczna",`${esc(X.season.text)}${X.season.next?` W kolejnym miesiącu: wzrost w ${fmt(X.season.next.up*100,0)}% lat.`:""}`]);
@@ -802,6 +840,45 @@ function viewGra(){const G=((D.replay||{}).game||[]).filter(g=>item(g.s));if(!G.
  <section class="box"><h3>Wynik gry</h3><div class="tiles"><div class="tile"><b>Rund</b><span>${sc.n}</span></div><div class="tile"><b>Ty</b><span>${sc.n?fmt(sc.you/sc.n*100,0)+"%":"–"}</span></div><div class="tile"><b>Strona</b><span>${sc.n?fmt(sc.site/sc.n*100,0)+"%":"–"}</span></div></div>
  <p class="note">To dobra lekcja: sprawdź, czy patrząc na wykres zgadujesz lepiej niż rzut monetą. Wynik jest zapisany tylko w tej przeglądarce. <button class="linkbtn" data-greset>Wyzeruj</button></p></section>`}
 
+
+// ---------- STATUS NAUKI I LABORATORIUM ----------
+const HZT={"4h":"za 4 godz.","1d":"na jutro","1w":"na tydzień","1m":"na miesiąc","sure_1d":"pewny sygnał – jutro","sure_1w":"pewny sygnał – tydzień","sure_1m":"pewny sygnał – miesiąc","scan_1d":"rynek – jutro","scan_1w":"rynek – tydzień"};
+function statusBox(){const T=D.track||{},A=T.activity||{},L=D.lab||{},upd=new Date(D.updated),mins=Math.round((Date.now()-upd)/6e4);
+ const P=T.preds||{},all=Object.values(P).filter(Boolean),n=all.reduce((a,v)=>a+v.n,0),h=all.reduce((a,v)=>a+v.n*v.hit/100,0);
+ return `<section class="box status-box"><h3>Co strona teraz robi</h3>
+ <ul class="clean nlist small">
+ <li><span class="dotc" style="background:var(--${mins<20?"up":"mid"})"></span><span><b>Ostatnia aktualizacja ${mins<2?"przed chwilą":mins+" min temu"}</b> – dane i analizy odświeżają się co ok. 5 minut (w nocy i w weekendy co godzinę).</span></li>
+ <li><span class="dotc" style="background:var(--info)"></span><span>W ostatniej dobie zapisała <b>${A.made_24h||0}</b> nowych przewidywań (Twoje instrumenty + ok. 90 z szerokiego rynku) i sprawdziła <b>${A.resolved_24h||0}</b>${A.resolved_24h?` – trafnych ${A.hit_24h} (${fmt(A.hit_24h/A.resolved_24h*100,0)}%)`:""}. Czeka na sprawdzenie: <b>${A.pending||0}</b>${A.next_due?`, najbliższe ${new Date(A.next_due).toLocaleString("pl-PL",{weekday:"short",hour:"2-digit",minute:"2-digit"})}`:""}.</span></li>
+ <li><span class="dotc" style="background:var(--info)"></span><span>Od początku sprawdziła <b>${n}</b> przewidywań${n?`, trafność <b class="${h/n>=0.55?"up":h/n<0.5?"down":""}">${fmt(h/n*100,1)}%</b>`:""}. Strategie odkryte przez stronę czekające na wynik: <b>${A.rules_pending||0}</b>.</span></li>
+ <li><span class="dotc" style="background:var(--info)"></span><span>Laboratorium: sprawdzono <b>${L.n||0}</b> z ${L.total||0} wersji modelu (2 nowe co godzinę).</span></li></ul>
+ <p class="note">Przewidywania na dzień sprawdzają się po dobie, na tydzień po tygodniu – dlatego liczby rosną stopniowo. Wszystko dzieje się automatycznie, bez Twojego udziału.</p></section>`}
+function labBox(){const L=D.lab;if(!L||!L.n)return "";const HN={"1d":"Na jutro","1w":"Na tydzień","1m":"Na miesiąc"};
+ const pr=(L.progress||[]);const w=600,h=140;
+ const lines=["1d","1w","1m"].map((k,j)=>{const pts=pr.map((x,i)=>x[k]&&x[k].sel!=null?[i,x[k].sel]:null).filter(Boolean);if(pts.length<2)return "";
+  const col=["var(--m-hist)","var(--m-trend)","var(--m-ref)"][j];
+  return `<polyline points="${pts.map(([i,v])=>`${(i/(Math.max(1,pr.length-1))*w).toFixed(1)},${(h-((v-50)/20)*h).toFixed(1)}`).join(" ")}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/>`}).join("");
+ const best=Object.entries(L.best||{}).map(([k,b])=>{const r=b.res;return `<div class="lab-row"><b>${HN[k]}</b>: trafność ${fmt(r.acc,1)}% <span class="dim">(zawsze „wzrost”: ${fmt(r.majority,1)}%)</span>
+  ${r.sure?` · <b class="up">strefa 65% znaleziona: ${fmt(r.sure.acc,1)}% w ${fmt(r.sure.coverage,1)}% przypadków</b>`:r.best_sel?` · najpewniejsze ${fmt(r.best_sel.coverage,1)}% przypadków: <b class="${r.best_sel.acc>=60?"up":""}">${fmt(r.best_sel.acc,1)}%</b>`:""}
+  <span class="nmeta">przepis: ${esc(b.text)}</span></div>`}).join("");
+ return `<section class="box"><h3>Laboratorium – jak rośnie trafność</h3>
+ <p class="small" style="margin-top:-4px">Co godzinę strona sama sprawdza 2 nowe wersje swojego modelu (inne cechy, horyzonty, okresy nauki) uczciwym testem na historii ~60 instrumentów. Najlepsze wersje są używane na żywo. Szuka „strefy 65%”: sytuacji, w których model jest tak pewny, że trafia w co najmniej 65% przypadków.</p>
+ ${best}
+ ${lines?`<p class="small" style="margin:12px 0 4px">Najlepsza trafność w najpewniejszych sytuacjach w kolejnych eksperymentach (oś: 50–70%):</p><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:140px;display:block;background:var(--card2);border-radius:8px"><line x1="0" x2="${w}" y1="${h-((65-50)/20)*h}" y2="${h-((65-50)/20)*h}" stroke="var(--up)" stroke-dasharray="5 4"/>${lines}</svg><div class="legend"><span style="color:var(--m-hist)">■ jutro</span><span style="color:var(--m-trend)">■ tydzień</span><span style="color:var(--m-ref)">■ miesiąc</span><span style="color:var(--up)">– – cel 65%</span></div>`:""}
+ ${(L.log||[]).length?`<details style="margin-top:8px"><summary class="small">Postępy laboratorium (${L.log.length})</summary><ul class="clean nlist small">${L.log.map(x=>`<li><span class="dotc" style="background:var(--up)"></span><span>${esc(x.text)}<span class="nmeta">${ago(x.t)}</span></span></li>`).join("")}</ul></details>`:""}
+ <details style="margin-top:6px"><summary class="small">Ostatnie eksperymenty</summary><ul class="clean nlist small">${(L.recent||[]).map(e=>`<li><span class="dotc" style="background:var(--${e.res&&e.res.edge>0?"up":"dim"})"></span><span>${esc(e.text)}<span class="nmeta">${e.res?`trafność ${fmt(e.res.acc,1)}% (zawsze „wzrost” ${fmt(e.res.majority,1)}%)${e.res.best_sel?`, najpewniejsze: ${fmt(e.res.best_sel.acc,1)}%`:""}`:"za mało danych"} · ${ago(e.time)}</span></span></li>`).join("")}</ul></details></section>`}
+function recentBox(){const R=((D.track||{}).recent||[]);if(!R.length)return "";
+ return `<section class="box"><h3>Ostatnio sprawdzone przewidywania</h3><ul class="clean nlist small">${R.slice(0,15).map(x=>{const ok=(x.p>50)===x.up;return `<li><span class="dotc" style="background:var(--${ok?"up":"down"})"></span><span><b>${esc(x.name)}</b> ${HZT[x.h]||x.h}: strona dawała ${fmt(x.p,0)}% szans na wzrost → cena ${x.up?"wzrosła":"spadła"} (${pct(x.ret*100,2)}) – ${ok?"<b class=\"up\">trafione ✓</b>":"<b class=\"down\">chybione ✗</b>"}<span class="nmeta">${new Date(x.t).toLocaleString("pl-PL",{dateStyle:"short",timeStyle:"short"})}</span></span></li>`}).join("")}</ul></section>`}
+
+// ---------- ZNANI INWESTORZY I TŁUM ----------
+function famousBox(){const F=D.famous||[],B=D.buzz_hot||[];if(!F.length&&!B.length)return "";
+ const sc=s=>s>=1.5?"go":s>=0.5?"go":s<=-1?"no":"wait";
+ return `<h3 style="margin:18px 0 10px">Znani inwestorzy i tłum z Reddita</h3>
+ <section class="box"><p class="small" style="margin-top:-4px">Co robią słynni inwestorzy (np. Warren Buffett, David Tepper, Bill Ackman – raporty kwartalne 13F, opóźnione ok. 1,5 miesiąca) i o czym najgłośniej mówią drobni inwestorzy na Reddicie. Przy każdej spółce: czy to się opłaca i dlaczego.</p>
+ <ul class="clean nlist">${F.slice(0,10).map(f=>`<li><span class="dotc" style="background:var(--${sc(f.score)==="go"?"up":sc(f.score)==="no"?"down":"mid"})"></span><span><a href="${f.own?"#i="+encodeURIComponent(f.symbol):"#teraz"}"><b>${esc(f.name)}</b></a> <span class="dim">(${esc(f.symbol)}${f.own?", z Twojej listy":""})</span> – <b class="c-${sc(f.score)}">${esc(f.title)}</b>
+  <span class="nmeta" style="color:var(--mut)">${f.why.map(esc).join(" ")}</span>${f.own?"":`<span class="nmeta"><button class="linkbtn small" data-add="${esc(f.symbol)}">Dodaj do mojej listy</button></span>`}</span></li>`).join("")}</ul>
+ ${B.length?`<p class="small" style="margin:12px 0 4px"><b>Najgłośniejsze na Reddicie (doba):</b></p><div class="cfoot">${B.map(b=>`<span class="chip">${esc(b.t)} · ${b.mentions}${b.change!=null?` (${b.change>=0?"+":""}${fmt(b.change*100,0)}%)`:""}</span>`).join("")}</div>
+ <p class="note">Szum w mediach społecznościowych to emocje, nie analiza – spółki „na fali” często mocno skaczą w obie strony. Transakcji polityków (Kongres USA) nie pokazujemy: darmowe źródła są zamknięte, a płatne (np. Quiver Quant) przekraczają budżet.</p>`:""}</section>`}
+
 // ---------- nawigacja ----------
 function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1));
  let v="rynki";const m=h.match(/^i=([^/]+)(?:\/(\w+))?$/);
@@ -825,6 +902,7 @@ document.addEventListener("click",e=>{const t=e.target;
  const ad=t.closest("[data-add]");if(ad){requestAdd(ad.dataset.add);return}
  if(t.closest("#addBtn")){const q=$("addQ");requestAdd(q.value);q.value="";$("pend").innerHTML=pendingHtml();return}
  if(t.closest("[data-remove]")){requestRemove(item(curSym()));return}
+ const tfb=t.closest("[data-tf]");if(tfb){tf=tfb.dataset.tf;store.set("tf",tf);if(tf!=="d"){chartMode="cnd";store.set("chartMode","cnd")}selCandle=null;route();return}
  const cm=t.closest("[data-cm]");if(cm){chartMode=cm.dataset.cm;store.set("chartMode",chartMode);document.querySelectorAll("[data-cm]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.cm===chartMode));selCandle=null;drawChart(item(curSym()));return}
  const cp=t.closest("[data-cpick]");if(cp){selCandle=+cp.dataset.cpick;drawChart(item(curSym()));$("cw").scrollIntoView({behavior:"smooth",block:"center"});return}
  const o=t.closest("[data-open]");if(o){location.hash="i="+encodeURIComponent(o.dataset.open);return}
