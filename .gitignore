@@ -2,3 +2,5 @@
 __pycache__/
 result.md
 changed
+.cache/
+track.json

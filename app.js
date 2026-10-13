@@ -66,7 +66,7 @@ function spark(it){const c=it.hist.c.slice(-30),mn=Math.min(...c),mx=Math.max(..
  return `<svg class="spark" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${c[c.length-1]>=c[0]?"var(--up)":"var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`}
 function card(it){const st=status(KIND[it.group]);
  return `<article class="card" data-open="${esc(it.symbol)}" tabindex="0" role="button" aria-label="Pokaż analizę: ${esc(it.name)}">
- <header><div><h2>${esc(it.name)}</h2><span class="sub">${esc(it.symbol)} · ${st.open?"otwarty":"zamknięty"}</span></div>
+ <header><div><h2>${esc(it.name)}</h2><span class="sub">${esc(it.symbol)} · ${st.open?"otwarty":"zamknięty"}${it.stale?' · <span class="midc">dane z poprzedniej aktualizacji</span>':""}</span></div>
  <div class="px">${fmt(it.price)} ${esc(it.currency)}<span class="chg ${sgn(it.change)}">${pct(it.change,2)}</span></div>${heart(it)}</header>
  ${spark(it)}
  <div class="cfoot"><span class="dec ${DEC[it.decision.key]} bg-${it.decision.key}">${esc(it.decision.title)}</span>${riskChip(it.risk)}${nextEventChip(it.symbol)}</div></article>`}
@@ -79,7 +79,7 @@ function viewRynki(){
  <input id="q" type="search" placeholder="Szukaj na liście" aria-label="Szukaj na liście"></div>
  <div id="out" class="grid"></div>
  <section class="box" style="margin-top:16px"><h3>Dodaj dowolny instrument</h3>
- <p class="note" style="margin-top:-4px">Wpisz nazwę lub symbol – akcję z dowolnej giełdy, kryptowalutę, surowiec albo indeks (np. Sony, KGHM, Ethereum, platyna). Otworzy się GitHub: kliknij tam zielony przycisk „Create”. Po 2–3 minutach instrument pojawi się na liście z pełną analizą. Usunąć go możesz w jego widoku (zakładka Decyzja, na dole).</p>
+ <p class="note" style="margin-top:-4px">Wpisz nazwę lub symbol – akcję z dowolnej giełdy, kryptowalutę, surowiec albo indeks (np. Sony, KGHM, Ethereum, platyna). Otworzy się GitHub: kliknij tam zielony przycisk „Create”. Po 3–5 minutach instrument pojawi się na liście z pełną analizą. Usunąć go możesz w jego widoku (zakładka Decyzja, na dole).</p>
  <div class="ctl" style="margin:0"><input id="addQ" placeholder="np. Sony albo KGH.WA" aria-label="Nazwa lub symbol do dodania"><button class="btn pri" id="addBtn">Dodaj</button></div><div id="pend">${pendingHtml()}</div></section>`;
  $("addQ").addEventListener("keydown",e=>{if(e.key==="Enter")$("addBtn").click()});
  $("q").oninput=renderList;renderList()}
@@ -109,12 +109,14 @@ function tDecyzja(it){const d=it.decision,pl=it.plan,r=it.risk;
   <div class="stat"><b>Szansa wzrostu jutro</b><strong class="${p50(it.overall)}">${fmt(it.overall,0)}%</strong></div>
   <div class="stat"><b>Szansa wzrostu w tydzień</b><strong class="${p50(it.p_week)}">${it.p_week==null?"–":fmt(it.p_week,0)+"%"}</strong></div>
   <div class="stat"><b>Ryzyko</b><strong class="r${r.level}">${esc(r.label)}</strong></div></div>
+ ${potBox(it)}
  ${ev.length||extra.length?`<div class="alert ${ev.some(e=>e.days<=1&&e.impact==="high")?"red":""}"><b>Zwróć uwagę</b><ul>${ev.map(e=>`<li>${esc(e.title)} – ${whenTxt(e.days)}${e.time?" o "+hm(new Date(e.date)):""}</li>`).join("")}${extra.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
  <section class="box plan"><h3>Co zrobić – krok po kroku</h3><p>${esc(pl.head)}</p><ol>${pl.steps.map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
   <div class="alert" style="margin:12px 0 0">${esc(pl.warn)}</div>
   <ul class="clean checks" aria-label="Warunki wzrostu">${pl.checks.map(c=>`<li><span class="ic ${c.ok?"up":"down"}">${c.ok?"✓":"✗"}</span><span>${esc(c.text)}</span></li>`).join("")}</ul>
   <div class="row" style="margin-top:14px"><button class="btn pri" data-tab="kalkulator">Oblicz bezpieczną wielkość pozycji →</button></div></section>
  <section class="box"><h3>Podsumowanie w prostych słowach</h3><ul class="sum">${it.summary.map(s=>`<li>${esc(s)}</li>`).join("")}</ul></section>
+ ${testBox(it)}
  <p class="note">„Szansa wzrostu” jest liczona z historii: pokazuje tyle, ile podobne odczyty naprawdę znaczyły w przeszłości. Dlatego zwykle jest blisko 50% – przewidywanie jednego dnia jest bardzo trudne. Ocena „Możesz rozważyć wejście” opiera się na warunkach trendu, ryzyku i kalendarzu.</p>
  <p style="margin-top:18px"><button class="btn sm" data-remove>Usuń ${esc(it.name)} z listy</button></p>`}
 
@@ -133,12 +135,12 @@ function tWykres(it){const L=it.levels,P=it.perf,h100=x=>x==null?null:x*100,tvt=
   ...(L.sma200!=null?[["Średnia 200 dni",fmt(L.sma200),ma(L.sma200)]]:[]),
   ["Roczny szczyt / dołek",`${fmt(L.hi52)} / ${fmt(L.lo52)}`,""]]
   .map(([k,v,h])=>`<dt>${k}</dt><dd>${v}</dd>${h?`<small>${h}</small>`:""}`).join("");
- $("tab").innerHTML=`<section class="box"><div class="seg" role="group" aria-label="Okres wykresu" style="margin-bottom:10px">${RANGES.filter(r=>r[0]!=="1D"||it.intra).map(r=>`<button data-r="${r[0]}" aria-pressed="${r[0]===range}">${r[1]}</button>`).join("")}</div>
+ $("tab").innerHTML=`${storyBox(it)}<section class="box"><div class="seg" role="group" aria-label="Okres wykresu" style="margin-bottom:10px">${RANGES.filter(r=>r[0]!=="1D"||it.intra).map(r=>`<button data-r="${r[0]}" aria-pressed="${r[0]===range}">${r[1]}</button>`).join("")}</div>
   <div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="small mut" id="rch"></div>
-  <div class="seg" role="group" aria-label="Rodzaj wykresu"><button data-cm="line" aria-pressed="${chartMode==="line"}">Linia</button><button data-cm="cnd" aria-pressed="${chartMode==="cnd"}">Świece</button></div></div>
+  <div class="seg" role="group" aria-label="Rodzaj wykresu"><button data-cm="line" aria-pressed="${chartMode==="line"}">Linia</button><button data-cm="cnd" aria-pressed="${chartMode==="cnd"}">Świece</button></div><button class="btn sm" data-annon aria-pressed="${annOn}">Objaśnienia na wykresie</button></div>
   <div class="chartwrap" id="cw"></div>
   <div class="legend" id="lg"><span><i></i>opór ${fmt(L.R)} i wsparcie ${fmt(L.S)} – szczyt i dołek z ostatnich 20 sesji</span></div>
-  <div id="cinfo"></div></section>
+  <div id="annleg" class="cfoot" style="margin-top:8px"></div><div id="cinfo"></div></section>
  <section class="box" id="patbox"></section>
  <div class="two"><section class="box"><h3>Teraz – zmiany ceny</h3><div class="tiles">${tiles}</div></section>
  <section class="box"><h3>Ważne poziomy</h3><dl class="kv">${kv}</dl></section></div>`}
@@ -147,7 +149,7 @@ function series(it){
  const H=it.hist,R=RANGES.find(r=>r[0]===range)||RANGES[3],last=H.dd[H.dd.length-1];let s=0;
  for(let i=0;i<H.dd.length;i++)if(H.dd[i]<=last-R[2])s=i;
  const xs=H.dd.slice(s).map(o=>dayDate(H.t0+o).getTime()),ys=H.c.slice(s);return {xs,ys,base:ys[0],long:R[2]>182}}
-function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.intra)range="1M";
+function drawChart(it){const wrap=$("cw");if(!wrap)return;if(range==="1D"&&!it.intra)range="1M";if($("annleg"))$("annleg").innerHTML="";
  if(chartMode==="cnd"&&range!=="5L")return drawCandles(it);
  const S=series(it),w=wrap.clientWidth||600,h=w<500?220:280,pl=6,pr=62,pt=10,pb=24,iw=w-pl-pr,ih=h-pt-pb;
  const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range);
@@ -185,22 +187,23 @@ function candleData(it){
  const O=it.ohlc,R=RANGES.find(r=>r[0]===range)||RANGES[3],last=O.dd[O.dd.length-1];let s=0;
  for(let i=0;i<O.dd.length;i++)if(O.dd[i]<=last-R[2])s=i;if(range==="1T")s=Math.max(0,O.dd.length-6);
  const pats=(it.patterns||[]).filter(p=>p.i>=s).map(p=>({i:p.i-s,key:p.key}));
- return {t:O.dd.slice(s).map(o=>dayDate(it.hist.t0+o).getTime()),o:O.o.slice(s),h:O.h.slice(s),l:O.l.slice(s),c:O.c.slice(s),intra:false,pats,long:R[2]>182}}
+ return {t:O.dd.slice(s).map(o=>dayDate(it.hist.t0+o).getTime()),o:O.o.slice(s),h:O.h.slice(s),l:O.l.slice(s),c:O.c.slice(s),intra:false,pats,long:R[2]>182,s0:s}}
 function drawCandles(it){const wrap=$("cw"),S=candleData(it),n=S.c.length,w=wrap.clientWidth||600,h=w<500?240:300,pl=6,pr=62,pt=14,pb=24,iw=w-pl-pr,ih=h-pt-pb;
- const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range);
- let mn=Math.min(...S.l),mx=Math.max(...S.h);if(showLv){mn=Math.min(mn,L.S);mx=Math.max(mx,L.R)}const pad=(mx-mn)*0.08||1;mn-=pad;mx+=pad;
+ const L=it.levels,showLv=!S.intra&&["1T","1M","3M"].includes(range)&&!(annOn&&it.chart);
+ let mn=Math.min(...S.l),mx=Math.max(...S.h);if(showLv&&!(annOn&&it.chart)){mn=Math.min(mn,L.S);mx=Math.max(mx,L.R)}const pad=(mx-mn)*0.1||1;mn-=pad;mx+=pad;
  const step=iw/n,X=i=>pl+(i+0.5)*step,Y=v=>pt+(1-(v-mn)/(mx-mn))*ih,bw=Math.max(1.5,Math.min(14,step*0.7));
  if(selCandle==null||selCandle>=n)selCandle=n-1;
  let grid="";for(let k=0;k<=4;k++){const v=mn+(mx-mn)/4*k,y=Y(v);grid+=`<line x1="${pl}" x2="${pl+iw}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${pl+iw+6}" y="${y+4}" fill="var(--dim)" font-size="11">${fmt(v)}</text>`}
  const lv=showLv?[L.R,L.S].map(v=>`<line x1="${pl}" x2="${pl+iw}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--mut)" stroke-dasharray="5 4" stroke-width="1.2"/>`).join(""):"";
  let body="";for(let i=0;i<n;i++){const up=S.c[i]>=S.o[i],col=up?"var(--up)":"var(--down)",x=X(i),y1=Y(Math.max(S.o[i],S.c[i])),y2=Y(Math.min(S.o[i],S.c[i]));
   body+=`<line x1="${x}" x2="${x}" y1="${Y(S.h[i])}" y2="${Y(S.l[i])}" stroke="${col}" stroke-width="1"/><rect x="${x-bw/2}" y="${y1}" width="${bw}" height="${Math.max(1,y2-y1)}" fill="${col}" rx="1"/>`}
- const byI={};S.pats.forEach(p=>(byI[p.i]=byI[p.i]||[]).push(p.key));
+ const byI={};S.pats.filter(p=>!annOn||p.i>=n-20).forEach(p=>(byI[p.i]=byI[p.i]||[]).push(p.key));
  let marks="";Object.entries(byI).forEach(([i,keys])=>{i=+i;const d=keys.map(k=>PAT[k].d),dir=d.includes("up")&&!d.includes("down")?"up":d.includes("down")&&!d.includes("up")?"down":"neutral",x=X(i);
   marks+=dir==="up"?`<path d="M${x} ${Y(S.l[i])+6}l-4 7h8z" fill="var(--up)"/>`:dir==="down"?`<path d="M${x} ${Y(S.h[i])-6}l-4 -7h8z" fill="var(--down)"/>`:`<circle cx="${x}" cy="${Y(S.h[i])-8}" r="2.5" fill="var(--mid)"/>`});
  const lab=i=>S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),S.long);
  const xl=[0,Math.floor((n-1)/2),n-1].map((i,j)=>`<text x="${X(i)}" y="${h-6}" fill="var(--dim)" font-size="11" text-anchor="${["start","middle","end"][j]}">${lab(i)}</text>`).join("");
- wrap.innerHTML=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Wykres świecowy ${esc(it.name)}">${grid}${lv}${body}${marks}
+ const ann=annSvg(it,S,X,Y,step,pt,ih,pl,iw,S.s0||0);
+ wrap.innerHTML=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Wykres świecowy ${esc(it.name)}">${grid}${lv}${ann}${body}${marks}
   <rect id="csel" x="${X(selCandle)-step/2}" y="${pt}" width="${step}" height="${ih}" fill="var(--ink)" opacity=".07"/>${xl}
   <rect x="${pl}" y="${pt}" width="${iw}" height="${ih}" fill="transparent" id="hit"/></svg><div class="tip" id="tip"></div>`;
  const ch=(S.c[n-1]/(S.intra&&it.intra.prev?it.intra.prev:S.o[0])-1)*100;
@@ -211,6 +214,8 @@ function drawCandles(it){const wrap=$("cw"),S=candleData(it),n=S.c.length,w=wrap
   tip.style.display="block";const tw=tip.offsetWidth;tip.style.left=Math.min(Math.max(x-tw/2,0),w-tw)+"px";tip.style.top="0px"});
  hit.addEventListener("pointerleave",()=>tip.style.display="none");
  hit.addEventListener("click",e=>{selCandle=idx(e);$("csel").setAttribute("x",X(selCandle)-step/2);candleInfo(it,S,selCandle)});
+ const keys=[...new Set([...ann.matchAll(/data-ann="(\w+)"(?: data-ap="([\d.]+)")?/g)].map(m=>m[1]+"|"+(m[2]||"")))];
+ $("annleg").innerHTML=keys.length?`<span class="small mut">Na wykresie:</span>`+keys.map(k=>{const [a,p]=k.split("|");return `<button class="chip" data-annk="${a}" data-ap="${p}">${ANN[a].n}${p?" "+fmt(+p):""}</button>`}).join(""):(S.intra?"":`<span class="small mut">${annOn?"Brak wyraźnych formacji w tym okresie – spróbuj dłuższego okresu (np. 6 mies.).":"Włącz „Objaśnienia na wykresie”, żeby zobaczyć poziomy i formacje."}</span>`);
  candleInfo(it,S,selCandle);patternList(it,S)}
 function patInfo(it,key){const P=PAT[key],st=(it.pattern_stats||{})[key],b=it.pattern_base;
  return `<div class="pat"><b class="${DIRCLS[P.d]}">${P.n}</b> <span class="chip">${P.d==="up"?"sygnał wzrostowy":P.d==="down"?"sygnał spadkowy":"niezdecydowanie"}</span>
@@ -219,7 +224,7 @@ function patInfo(it,key){const P=PAT[key],st=(it.pattern_stats||{})[key],b=it.pa
 function candleInfo(it,S,i){const el=$("cinfo");if(!el)return;const keys=S.pats.filter(p=>p.i===i).map(p=>p.key);
  el.innerHTML=`<div class="cbox"><p class="small" style="margin:0 0 6px"><b>Wybrana świeca: ${S.intra?hm(new Date(S.t[i])):dlabel(new Date(S.t[i]),true)}</b> · otwarcie ${fmt(S.o[i])}, najwyżej ${fmt(S.h[i])}, najniżej ${fmt(S.l[i])}, zamknięcie ${fmt(S.c[i])}</p>
  <p class="small" style="margin:0">${candleDesc(S.o[i],S.h[i],S.l[i],S.c[i])}</p>${keys.map(k=>patInfo(it,k)).join("")}
- <p class="note" style="margin:8px 0 0">Kliknij dowolną świecę, żeby zobaczyć jej opis. Trójkąt pod świecą = formacja wzrostowa, nad świecą = spadkowa, kropka = niezdecydowanie.</p></div>`}
+ <p class="note" style="margin:8px 0 0">Kliknij dowolną świecę, żeby zobaczyć jej opis. Trójkąt pod świecą = formacja wzrostowa, nad świecą = spadkowa, kropka = niezdecydowanie${annOn?" (przy włączonych objaśnieniach pokazujemy formacje z ostatnich 20 sesji)":""}.</p></div>`}
 function patternList(it,S){const el=$("patbox");if(!el)return;
  if(S.intra){el.innerHTML=`<h3>Jak czytać świece</h3>${howTo()}`;return}
  const rec=S.pats.filter(p=>p.i>=S.c.length-20).reverse();
@@ -510,7 +515,7 @@ function issueUrl(title){return `${REPO}/issues/new?title=${encodeURIComponent(t
 function requestAdd(q){q=q.trim();if(!q)return;pending=pending.filter(p=>Date.now()-p.t<36e5);pending.push({q,t:Date.now()});store.set("pending",pending);window.open(issueUrl("Dodaj: "+q),"_blank","noopener")}
 function requestRemove(it){if(confirm(`Usunąć ${it.name} z listy dla wszystkich urządzeń? Otworzy się GitHub – kliknij tam „Create”.`))window.open(issueUrl("Usuń: "+it.symbol),"_blank","noopener")}
 function pendingHtml(){pending=pending.filter(p=>Date.now()-p.t<36e5&&!D.items.some(i=>(i.name+" "+i.symbol).toLowerCase().includes(p.q.toLowerCase())));store.set("pending",pending);
- return pending.length?`<p class="note">W trakcie dodawania: ${pending.map(p=>esc(p.q)).join(", ")} – pojawi się po ok. 2–3 minutach od kliknięcia „Create” na GitHubie (odśwież stronę).</p>`:""}
+ return pending.length?`<p class="note">W trakcie dodawania: ${pending.map(p=>esc(p.q)).join(", ")} – pojawi się po ok. 3–5 minutach od kliknięcia „Create” na GitHubie (odśwież stronę).</p>`:""}
 
 // ---------- TERAZ WARTO ----------
 function candidates(){const own=new Set(D.items.map(i=>i.symbol));
@@ -535,19 +540,22 @@ function newsLi(n){return `<li><span class="dotc" style="background:var(--${n.di
  <span class="nmeta">${n.tier<=1?`<span class="tag t${n.tier}">${n.tier===0?"oficjalne":"wiarygodne"}</span>`:""}${n.lang?`<span class="tag">${n.lang.toUpperCase()}</span>`:""}${esc(n.source)} · ${ago(n.date)}</span></span></li>`}
 function changeLi(c){return `<li><span class="dotc" style="background:var(--${c.dir==="up"?"up":"down"})"></span><span><a href="#i=${encodeURIComponent(c.symbol)}"><b>${esc(c.name)}</b></a> – ${esc(c.text)}<span class="nmeta">${ago(c.time)}</span></span></li>`}
 function viewTeraz(){
- const all=candidates(),risky=all.filter(x=>x.score>=70&&x.risk>=4).length;
- const top=all.filter(x=>x.score>=70&&x.risk<=3&&x.dec!=="no").sort((a,b)=>b.score-a.score).slice(0,6);
+ const PK=D.picks;let top,risky;
+ if(PK){top=PK[terazH]||[];risky=PK[terazH+"_risky"]||0}else{const all=candidates();risky=all.filter(x=>x.score>=70&&x.risk>=4).length;top=all.filter(x=>x.score>=70&&x.risk<=3&&x.dec!=="no").sort((a,b)=>b.score-a.score).slice(0,6)}
+ const ann=PK?["short","mid","long"].map(h=>{const x=(PK[h]||[])[0];return x?`<li><b>${HZN[h]}:</b> <a href="${x.own?"#i="+encodeURIComponent(x.symbol):"#teraz"}" ${x.own?"":`data-th="${h}"`}>${esc(x.name)}</a> – potencjał ${x.score}/100. ${esc((x.plus||[])[0]||"")}</li>`:`<li><b>${HZN[h]}:</b> teraz nic nie wyróżnia się wystarczająco – lepiej poczekać.</li>`}).join(""):"";
  const warn=D.items.filter(it=>it.potential.score<=35||it.decision.key==="no").filter(it=>fav.includes(it.symbol)).slice(0,6);
  const ch=(D.changes||[]),chFav=ch.filter(c=>fav.includes(c.symbol)),chOther=ch.filter(c=>!fav.includes(c.symbol));
  store.set("seenChanges",ch.length?ch[0].time:"");updBadge();
  const scanT=D.scan?new Date(D.scan.time):null;
  $("app").innerHTML=`<div class="upd">${updTxt()}</div><h2 style="margin:4px 0 6px">Teraz warto</h2>
- <p class="note" style="margin:0 0 12px">Instrumenty, które w tej chwili mają najlepszy układ: trend, wybicia, siła względem rynku, obroty, wiadomości i historia podobnych sytuacji – minus ryzyko i nadchodzące wyniki. Przeskanowano ${((D.scan||{}).items||[]).length+D.items.length} instrumentów z Twojej listy i z rynku${scanT?` (skan: ${hm(scanT)})`:""}. To lista do sprawdzenia, nie gotowe polecenie kupna.</p>
- ${ch.length?`<section class="box"><h3>Zmiany od ostatnich aktualizacji</h3>${chFav.length?`<ul class="clean nlist">${chFav.slice(0,8).map(changeLi).join("")}</ul>`:`<p class="note">Brak zmian w ulubionych.</p>`}
+ <p class="note" style="margin:0 0 12px">Instrumenty, które w tej chwili mają najlepszy układ: trend, wybicia, siła względem rynku, obroty, wiadomości i historia podobnych sytuacji – minus ryzyko i nadchodzące wyniki. Przeskanowano ${((D.scan||{}).items||[]).length+D.items.length} instrumentów z Twojej listy i z rynku${scanT?` (skan: ${hm(scanT)})`:""}. Wybierz horyzont: krótko (najbliższa sesja), średnio (tydzień) albo długo (miesiące). To lista do sprawdzenia, nie gotowe polecenie kupna – skuteczność propozycji sprawdzisz w zakładce „Wyniki”.</p>
+ ${ann?`<section class="box hero bg-go" style="border-color:transparent"><h3 style="font-size:17px;margin-bottom:6px">Ogłoszenia – w co warto teraz zajrzeć</h3><ul style="margin:0">${ann}</ul></section>`:""}
+ ${ch.length?`<section class="box"><h3>Zmiany od ostatnich aktualizacji</h3>${chFav.length?`<ul class="clean nlist">${chFav.slice(0,4).map(changeLi).join("")}</ul>${chFav.length>4?`<details><summary class="small">Starsze zmiany w ulubionych (${chFav.length-4})</summary><ul class="clean nlist">${chFav.slice(4,20).map(changeLi).join("")}</ul></details>`:""}`:`<p class="note">Brak zmian w ulubionych.</p>`}
   ${chOther.length?`<details style="margin-top:6px"><summary class="small">Pozostałe instrumenty (${chOther.length})</summary><ul class="clean nlist">${chOther.slice(0,15).map(changeLi).join("")}</ul></details>`:""}
   <div class="row" style="margin-top:8px"><button class="btn sm" id="notifBtn">${"Notification" in window&&Notification.permission==="granted"?"Powiadomienia w przeglądarce: włączone":"Włącz powiadomienia w przeglądarce"}</button></div></section>`:""}
- <h3 style="margin:18px 0 10px">Największy potencjał teraz</h3>
- ${top.length?`<div class="grid">${top.map(oppCard).join("")}</div>`:`<div class="msg">W tej chwili nic nie ma wyraźnie dobrego układu. Najlepszą decyzją bywa poczekać – brak transakcji to też pozycja.</div>`}
+ <div class="row" style="justify-content:space-between;margin:18px 0 10px"><h3 style="margin:0">Największy potencjał teraz</h3>
+ <div class="seg" role="group" aria-label="Horyzont">${Object.entries(HZN).map(([k,l])=>`<button data-th="${k}" aria-pressed="${k===terazH}">${l}</button>`).join("")}</div></div>
+ ${top.length?`<div class="grid">${top.slice(0,6).map(oppCard).join("")}</div>`:`<div class="msg">W tej chwili nic nie ma wyraźnie dobrego układu. Najlepszą decyzją bywa poczekać – brak transakcji to też pozycja.</div>`}
  ${risky?`<p class="note">Pominięto ${risky} instrumentów z bardzo wysokim ryzykiem – mają dobry układ, ale są zbyt zmienne dla początkującego.</p>`:""}
  ${warn.length?`<h3 style="margin:18px 0 10px">Na co uważać wśród ulubionych</h3><section class="box"><ul class="clean nlist">${warn.map(it=>`<li><span class="dotc" style="background:var(--down)"></span><span><a href="#i=${encodeURIComponent(it.symbol)}"><b>${esc(it.name)}</b></a> – ${esc(it.decision.title)}. ${esc((it.potential.minus[0]||it.decision.reasons[0]||""))}</span></li>`).join("")}</ul></section>`:""}
  <h3 style="margin:18px 0 10px">Najważniejsze wiadomości ze świata</h3>
@@ -560,26 +568,128 @@ function updBadge(){const a=document.querySelector('.nav a[data-v="teraz"]');if(
 // ---------- automatyczne odświeżanie ----------
 function toast(html){let t=$("toast");if(!t){t=document.createElement("div");t.id="toast";document.body.appendChild(t)}
  t.innerHTML=html;t.className="show";clearTimeout(t._h);t._h=setTimeout(()=>t.className="",9000)}
-function refresh(){fetch("data.json?"+Date.now()).then(r=>r.json()).then(d=>{if(!D||d.updated===D.updated)return;
+const DATA_URL="https://raw.githubusercontent.com/alexanderdimer-ops/centrum-rynku/dane/data.json";
+function loadData(){const local=()=>fetch("data.json?"+Date.now()).then(r=>r.json());
+ if(location.hostname==="localhost"||location.hostname==="127.0.0.1")return local();
+ return fetch(DATA_URL+"?"+Date.now()).then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>local().then(l=>l.updated>d.updated?l:d).catch(()=>d)).catch(local)}
+function refresh(){loadData().then(d=>{if(!D||d.updated===D.updated)return;
  const old=new Set((D.changes||[]).map(c=>c.time+c.symbol+c.kind));D=d;
  const fresh=(d.changes||[]).filter(c=>!old.has(c.time+c.symbol+c.kind)&&fav.includes(c.symbol));
  const busy=document.activeElement&&/INPUT|SELECT/.test(document.activeElement.tagName)||/\/kalkulator$/.test(location.hash);
- if(!busy)route();updBadge();
+ resolveTests();if(!busy)route();updBadge();
  toast(fresh.length?`<b>Nowe dane – ${fresh.length} ${fresh.length===1?"zmiana":"zmiany"} w ulubionych:</b><br>${fresh.slice(0,3).map(c=>`${esc(c.name)}: ${esc(c.text)}`).join("<br>")}`:`Zaktualizowano dane (${hm(new Date(d.updated))}).`);
  if(fresh.length&&"Notification" in window&&Notification.permission==="granted")fresh.slice(0,3).forEach(c=>new Notification(c.name+" – Centrum rynku",{body:c.text}))}).catch(()=>{})}
-setInterval(refresh,5*60*1000);
+setInterval(refresh,2*60*1000);
+
+
+// ---------- POTENCJAŁ W TRZECH HORYZONTACH ----------
+const HZN={short:"Krótko (1 dzień)",mid:"Średnio (tydzień)",long:"Długo (miesiące)"};
+let potH=store.get("potH","mid"),terazH=store.get("terazH","mid");
+const potOf=(it,h)=>h==="mid"?it.potential:it.potential[h];
+const scoreCls=s=>s==null?"flat":s>=70?"up":s<=35?"down":"midc";
+function potBox(it){const P=potOf(it,potH)||{};
+ return `<section class="box"><h3>Potencjał wzrostu – wybierz horyzont</h3>
+ <div class="stats3 pot">${Object.entries(HZN).map(([k,l])=>{const s=(potOf(it,k)||{}).score;return `<button class="stat${k===potH?" sel":""}" data-pot="${k}"><b>${l}</b><strong class="${scoreCls(s)}">${s==null?"–":s+"/100"}</strong></button>`}).join("")}</div>
+ ${P.plus&&P.plus.length?`<p class="small" style="margin:0 0 4px"><b>Za:</b></p><ul class="sum small">${P.plus.map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
+ ${P.minus&&P.minus.length?`<p class="small" style="margin:8px 0 4px"><b>Przeciw:</b></p><ul class="sum small">${P.minus.map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
+ <p class="note">Krótko: układ na wykresie godzinowym, dzisiejsze tempo, ostatnia świeca, wiadomości z doby. Średnio: trend, wybicia, siła względem rynku, wiadomości. Długo: średnia z 200 dni, siła w pół roku i roku, odległość od szczytu, zmienność i historia podobnych układów.</p></section>`}
+
+// ---------- TWOJE TESTY PRZEWIDYWAŃ ----------
+let myTests=store.get("myTests",[]);
+const TH={"4h":4*36e5,"1d":864e5,"1w":7*864e5};
+const THN={"4h":"4 godziny","1d":"1 dzień","1w":"tydzień"};
+function testBox(it){const pr={"4h":it.hours&&it.hours.p,"1d":it.overall,"1w":it.p_week};
+ return `<section class="box"><h3>Sprawdź, czy strona ma rację</h3><p class="small" style="margin-top:-4px">Kliknij, a strona „na niby” wejdzie teraz w ${esc(it.name)} po ${fmt(it.price)} ${esc(it.currency)} i po wybranym czasie sama sprawdzi, czy przewidywanie się sprawdziło. Wyniki znajdziesz w zakładce „Wyniki”.</p>
+ <div class="row">${Object.keys(TH).filter(h=>pr[h]!=null).map(h=>`<button class="btn sm" data-test="${h}">Za ${THN[h]} (szansa wzrostu ${fmt(pr[h],0)}%)</button>`).join("")}</div></section>`}
+function addTest(it,h){const pr={"4h":it.hours&&it.hours.p,"1d":it.overall,"1w":it.p_week}[h];
+ myTests.unshift({id:Date.now(),s:it.symbol,n:it.name,cur:it.currency,t:Date.now(),px:it.price,h,p:pr,dec:it.decision.title});store.set("myTests",myTests);
+ toast(`Zapisano test: ${esc(it.name)} – sprawdzę za ${THN[h]}. Wynik w zakładce „Wyniki”.`)}
+function priceAt(it,ms){
+ if(it.intra&&it.intra.t.length){const I=it.intra;if(I.t[0]*1000<=ms&&I.t[I.t.length-1]*1000>=ms){for(let k=0;k<I.t.length;k++)if(I.t[k]*1000>=ms)return I.c[k]}}
+ const H=it.hist,day=Math.floor(ms/864e5)+719163;for(let k=0;k<H.dd.length;k++)if(H.t0+H.dd[k]>=day&&H.t0+H.dd[k]<=day+4&&H.t0+H.dd[k]<Math.floor(Date.now()/864e5)+719163)return H.c[k];
+ return Date.now()-ms<36e5*3?it.price:null}
+function resolveTests(){let ch=false;myTests.forEach(x=>{if(x.res!=null)return;const due=x.t+TH[x.h];if(Date.now()<due)return;const it=item(x.s);if(!it)return;
+ const px=priceAt(it,due);if(px==null)return;x.res=px;x.up=px>x.px;x.ok=(x.p>50)===x.up;ch=true});if(ch)store.set("myTests",myTests)}
+
+// ---------- WYNIKI (samotestowanie strony) ----------
+function viewWyniki(){resolveTests();const T=D.track||{},HT=D.hist_test||{},P=T.preds||{};
+ const tile=(l,s,ex)=>`<div class="tile"><b>${l}</b><span class="${s?s.hit>=55?"up":s.hit<48?"down":"flat":"flat"}">${s?fmt(s.hit,0)+"%":"–"}</span><small class="dim" style="display:block;font-size:11.5px">${s?`${s.n} spr. · wzrosty ${fmt(s.up,0)}%`:ex}</small></div>`;
+ const sim=T.sim,closed=T.sims_closed||[],open=T.sims_open||[];
+ const curve=(T.curve||[]).map(x=>x.eq);const cw=600,chh=120;
+ const curveSvg=curve.length>1?(()=>{const mn=Math.min(0,...curve),mx=Math.max(0,...curve),k=mx-mn||1;const pts=curve.map((v,i)=>`${(i/(curve.length-1)*cw).toFixed(1)},${(chh-6-(v-mn)/k*(chh-12)).toFixed(1)}`).join(" ");
+  return `<svg viewBox="0 0 ${cw} ${chh}" preserveAspectRatio="none" style="width:100%;height:120px;display:block" aria-label="Wynik wirtualnych transakcji w czasie"><line x1="0" x2="${cw}" y1="${chh-6-(0-mn)/k*(chh-12)}" y2="${chh-6-(0-mn)/k*(chh-12)}" stroke="var(--line2)" stroke-dasharray="4 4"/><polyline points="${pts}" fill="none" stroke="${curve[curve.length-1]>=0?"var(--up)":"var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`})():"";
+ const bins=Object.entries(T.bins||{}).map(([h,b])=>`<tr><td>${{"4h":"4 godziny","1d":"1 dzień","1w":"tydzień","1m":"miesiąc"}[h]}</td>${b.map(x=>`<td>${x.n?`${fmt(x.up,0)}% <span class="dim">(${x.n})</span>`:"–"}</td>`).join("")}</tr>`).join("");
+ const ps=Object.values(T.per_sym||{}).sort((a,b)=>b.hit-a.hit);
+ const mine=myTests.slice(0,40),mDone=mine.filter(x=>x.res!=null),mHit=mDone.filter(x=>x.ok).length;
+ const hs=HT.signal,he=HT.every;
+ $("app").innerHTML=`<div class="upd">${updTxt()}</div><h2 style="margin:4px 0 6px">Wyniki – czy strona ma rację?</h2>
+ <p class="note" style="margin:0 0 12px">Strona sama, bez Twojego udziału, zapisuje swoje przewidywania dla wszystkich instrumentów i po czasie sprawdza, czy się sprawdziły. Otwiera też wirtualne transakcje, gdy mówi „Możesz rozważyć wejście”. Na tej podstawie sama się poprawia: koryguje szanse i zaostrza wymagania, gdy jej propozycje wychodzą słabo.</p>
+ <section class="box"><h3>Trafność przewidywań kierunku (na żywo)</h3><div class="tiles">${tile("Za 4 godziny",P["4h"],"pierwsze po 4 godz.")}${tile("Za 1 dzień",P["1d"],"pierwsze jutro")}${tile("Za tydzień",P["1w"],"pierwsze za tydzień")}${tile("Za miesiąc",P["1m"],"pierwsze za miesiąc")}</div>
+  <p class="note">Trafność = jak często strona dobrze wskazała kierunek (wzrost/spadek). 50% to rzut monetą. Czeka na sprawdzenie: ${T.pending||0} przewidywań.</p>
+  ${bins?`<details><summary class="small">Kalibracja – czy „szansa 60%” naprawdę oznacza 60%?</summary><table class="fc"><thead><tr><th>Horyzont</th><th>&lt;45%</th><th>45–50%</th><th>50–55%</th><th>55–60%</th><th>60%+</th></tr></thead><tbody>${bins}</tbody></table><p class="note">W komórkach: jak często cena naprawdę rosła przy takiej podanej szansie (w nawiasie liczba przypadków). Gdy uzbiera się ≥30 przypadków, strona sama koryguje podawane szanse.</p></details>`:""}</section>
+ <section class="box"><h3>Wirtualne transakcje strony</h3>
+  <p class="small" style="margin-top:-4px">Gdy strona mówi „Możesz rozważyć wejście”, kupuje „na niby” ze stop lossem (2×ATR) i celem (3×ATR). Wychodzi na stopie, na celu albo po 14 dniach. Wynik liczony w R (1 R = planowane ryzyko).</p>
+  <div class="tiles"><div class="tile"><b>Zamknięte</b><span>${sim?sim.n:0}</span></div><div class="tile"><b>Zyskowne</b><span>${sim?fmt(sim.hit,0)+"%":"–"}</span></div><div class="tile"><b>Średnio na transakcję</b><span class="${sim?sgn(sim.avg):"flat"}">${sim?(sim.avg>=0?"+":"−")+fmt(Math.abs(sim.avg),2)+" R":"–"}</span></div><div class="tile"><b>Otwarte teraz</b><span>${open.length}</span></div></div>
+  ${curveSvg?`<p class="small" style="margin:12px 0 4px">Łączny wynik w czasie (R):</p>${curveSvg}`:""}
+  ${open.length?`<details style="margin-top:10px"><summary class="small">Otwarte (${open.length})</summary><ul class="clean nlist small">${open.map(x=>{const it=item(x.s),r=it?(it.price-x.px)/(x.px-x.stop):0;return `<li><span class="dotc" style="background:var(--${r>=0?"up":"down"})"></span><span><b>${esc(x.n||x.s)}</b> od ${new Date(x.t).toLocaleDateString("pl-PL")} po ${fmt(x.px)} · stop ${fmt(x.stop)} · cel ${fmt(x.target)} · teraz <b class="${sgn(r)}">${r>=0?"+":"−"}${fmt(Math.abs(r),2)} R</b></span></li>`}).join("")}</ul></details>`:""}
+  ${closed.length?`<details style="margin-top:6px"><summary class="small">Ostatnio zamknięte (${closed.length})</summary><ul class="clean nlist small">${closed.map(x=>`<li><span class="dotc" style="background:var(--${x.R>0?"up":"down"})"></span><span><b>${esc(x.n||x.s)}</b> · ${{stop:"stop loss",cel:"cel osiągnięty",czas:"koniec czasu"}[x.res]} · <b class="${sgn(x.R)}">${x.R>=0?"+":"−"}${fmt(Math.abs(x.R),2)} R</b><span class="nmeta">${new Date(x.t).toLocaleDateString("pl-PL")} → ${new Date(x.end).toLocaleDateString("pl-PL")}</span></span></li>`).join("")}</ul></details>`:""}</section>
+ <section class="box"><h3>Test na historii (ostatnie ~4 lata)</h3>${hs&&he?`<p class="small" style="margin-top:-4px">Gdyby strona działała wcześniej i wchodziła przy spełnionych warunkach wzrostu (stop 2×ATR, cel 3×ATR, maks. 10 sesji):</p>
+  <div class="tiles"><div class="tile"><b>Transakcji</b><span>${hs.n}</span></div><div class="tile"><b>Zyskowne</b><span>${fmt(hs.win*100,0)}%</span></div><div class="tile"><b>Średnio</b><span class="${sgn(hs.avgR)}">${hs.avgR>=0?"+":"−"}${fmt(Math.abs(hs.avgR),2)} R</span></div><div class="tile"><b>Wejście w losowy dzień</b><span>${he.avgR>=0?"+":"−"}${fmt(Math.abs(he.avgR),2)} R</span></div></div>
+  <p class="note">${hs.avgR>he.avgR+0.03?`Sygnały strony dawały średnio lepszy wynik niż wchodzenie w przypadkowe dni (${fmt(hs.avgR,2)} R wobec ${fmt(he.avgR,2)} R) – jest mała, ale realna przewaga.`:`Sygnały strony nie były wyraźnie lepsze od wchodzenia w przypadkowe dni – traktuj je jako porządkowanie informacji, nie gotowy przepis na zysk.`} Wynik nie uwzględnia kosztów (spread, prowizje), które zmniejszają zysk. Rynki w tym okresie w większości rosły, co pomaga każdej strategii kupna.</p>`:`<p class="note">Brak danych.</p>`}</section>
+ <section class="box"><h3>Propozycje z „Teraz warto”</h3><div class="tiles">${["short","mid","long"].map(h=>{const s=(T.picks||{})[h];return `<div class="tile"><b>${HZN[h]}</b><span class="${s?sgn(s.avg):"flat"}">${s?`${fmt(s.hit,0)}% zysk.`:"–"}</span><small class="dim" style="display:block;font-size:11.5px">${s?`${s.n} propozycji · średnio ${pct(s.avg*100)}`:"czeka na wyniki"}</small></div>`}).join("")}</div>
+  <p class="note">Próg wejścia na listę teraz: krótko ${T.threshold?T.threshold.short:62}, średnio ${T.threshold?T.threshold.mid:70}, długo ${T.threshold?T.threshold.long:70} punktów. Strona sama go podnosi, gdy jej propozycje wypadają słabo, i obniża, gdy wypadają dobrze.</p></section>
+ ${ps.length?`<section class="box"><h3>Na których instrumentach strona przewiduje najlepiej</h3><table class="fc"><thead><tr><th>Instrument</th><th>Sprawdzeń</th><th>Trafność</th></tr></thead><tbody>${ps.map(x=>`<tr><td>${esc(x.name)}</td><td>${x.n}</td><td class="${x.hit>=55?"up":x.hit<48?"down":"flat"}">${fmt(x.hit,0)}%</td></tr>`).join("")}</tbody></table></section>`:""}
+ <section class="box"><h3>Twoje testy</h3>${mine.length?`<p class="small" style="margin-top:-4px">Sprawdzone: ${mDone.length}, trafione: ${mHit}${mDone.length?` (${fmt(mHit/mDone.length*100,0)}%)`:""}.</p><ul class="clean nlist small">${mine.map(x=>`<li><span class="dotc" style="background:var(--${x.res==null?"dim":x.ok?"up":"down"})"></span><span><b>${esc(x.n)}</b> · za ${THN[x.h]} · szansa wzrostu ${fmt(x.p,0)}% · wejście ${fmt(x.px)} ${esc(x.cur)}
+  <span class="nmeta">${x.res==null?`czeka do ${new Date(x.t+TH[x.h]).toLocaleString("pl-PL",{dateStyle:"short",timeStyle:"short"})}`:`wynik: ${fmt(x.res)} (${pct((x.res/x.px-1)*100)}) – ${x.ok?"przewidywanie trafne ✓":"przewidywanie chybione ✗"}`}</span></span></li>`).join("")}</ul>`:`<p class="note">Nie masz jeszcze testów. Wejdź w dowolny instrument → zakładka „Decyzja” → „Sprawdź, czy strona ma rację”.</p>`}</section>`}
+
+// ---------- OBJAŚNIENIA NA WYKRESIE ----------
+let annOn=store.get("annOn",true);
+const ANN={res:{n:"Opór",t:"Poziom, przy którym cena kilka razy zawracała w dół – tam czekali sprzedający. Przebicie oporu w górę to sygnał siły (wybicie)."},
+ sup:{n:"Wsparcie",t:"Poziom, przy którym cena kilka razy odbijała w górę – tam czekali kupujący. Spadek pod wsparcie to sygnał słabości."},
+ tl_up:{n:"Linia trendu wzrostowego",t:"Łączy coraz wyższe dołki. Dopóki cena jest nad nią, kupujący kontrolują rynek. Przebicie w dół to ostrzeżenie."},
+ tl_down:{n:"Linia trendu spadkowego",t:"Łączy coraz niższe szczyty. Dopóki cena jest pod nią, kontrolują sprzedający. Przebicie w górę może oznaczać koniec spadków."},
+ top:{n:"Podwójny szczyt",t:"Cena dwa razy doszła do tego samego poziomu i dwa razy zawróciła – kupujący nie dali rady. Potwierdzeniem jest spadek pod dołek między szczytami (linia szyi)."},
+ bottom:{n:"Podwójny dołek",t:"Cena dwa razy spadła do tego samego poziomu i dwa razy odbiła – sprzedający nie dali rady. Potwierdzeniem jest wybicie nad szczyt między dołkami (linia szyi)."},
+ golden:{n:"Złoty krzyż",t:"Średnia z 50 dni przecina średnią z 200 dni w górę. Sygnał, że długoterminowy trend zmienia się na wzrostowy."},
+ death:{n:"Krzyż śmierci",t:"Średnia z 50 dni przecina średnią z 200 dni w dół. Sygnał długoterminowej słabości."},
+ breakout:{n:"Wybicie",t:"Zamknięcie powyżej najwyższej ceny z 20 sesji – kupujący przełamali opór. Często początek dalszych wzrostów (ale bywa fałszywe)."},
+ breakdown:{n:"Przełamanie w dół",t:"Zamknięcie poniżej najniższej ceny z 20 sesji – sprzedający przełamali wsparcie."},
+ buyers:{n:"Przewaga kupujących",t:"Zielone tło: cena jest nad rosnącą średnią z 20 dni – kupujący mają kontrolę."},
+ sellers:{n:"Przewaga sprzedających",t:"Czerwone tło: cena jest pod opadającą średnią z 20 dni – sprzedający mają kontrolę."}};
+function annSvg(it,S,X,Y,step,pt,ih,pl,iw,s0){const A=it.chart;if(!A||!annOn||S.intra)return "";const n=S.c.length,inv=i=>i-s0,vis=i=>i>=0&&i<n;let g="";
+ A.regime.forEach(r=>{const a=Math.max(0,inv(r.from)),b=Math.min(n-1,inv(r.to));if(b<0||a>n-1||b<a)return;
+  g+=`<rect data-ann="${r.side>0?"buyers":"sellers"}" x="${X(a)-step/2}" y="${pt}" width="${(b-a+1)*step}" height="${ih}" fill="var(--${r.side>0?"up":"down"})" opacity=".07"/>`});
+ A.levels.forEach(l=>{const y=Y(l.price);if(y<pt||y>pt+ih)return;const col=l.kind==="res"?"var(--down)":"var(--up)";
+  g+=`<g data-ann="${l.kind}" data-ap="${l.price}" style="cursor:pointer"><line x1="${pl}" x2="${pl+iw}" y1="${y}" y2="${y}" stroke="${col}" stroke-width="1.3" stroke-dasharray="6 4" opacity=".85"/>
+  <rect x="${pl+2}" y="${y-15}" width="${l.kind==="res"?118:132}" height="14" rx="3" fill="var(--bg)" opacity=".85"/><text x="${pl+6}" y="${y-4}" fill="${col}" font-size="11" font-weight="600">${l.kind==="res"?"Opór":"Wsparcie"} ${fmt(l.price)} (${l.touches}×)</text></g>`});
+ const T=A.trendline;if(T&&vis(inv(T.i1))){const x1=X(inv(T.i1)),x2=X(inv(T.i2));
+  g+=`<g data-ann="tl_${T.kind}" style="cursor:pointer"><line x1="${x1}" x2="${x2}" y1="${Y(T.p1)}" y2="${Y(T.p2)}" stroke="var(--info)" stroke-width="2"/><text x="${x2-4}" y="${Y(T.p2)+(T.kind==="up"?16:-8)}" fill="var(--info)" font-size="11" text-anchor="end" font-weight="600">linia trendu</text></g>`}
+ const Dd=A.double;if(Dd&&vis(inv(Dd.i1))){const x1=X(inv(Dd.i1)),x2=X(inv(Dd.i2)),col=Dd.type==="top"?"var(--down)":"var(--up)",dy=Dd.type==="top"?-10:14;
+  g+=`<g data-ann="${Dd.type}" style="cursor:pointer"><circle cx="${x1}" cy="${Y(Dd.p1)}" r="5" fill="none" stroke="${col}" stroke-width="2"/><circle cx="${x2}" cy="${Y(Dd.p2)}" r="5" fill="none" stroke="${col}" stroke-width="2"/>
+  <line x1="${x1}" x2="${X(n-1)}" y1="${Y(Dd.neck)}" y2="${Y(Dd.neck)}" stroke="${col}" stroke-dasharray="2 3"/><text x="${(x1+x2)/2}" y="${Y((Dd.p1+Dd.p2)/2)+dy}" fill="${col}" font-size="11" text-anchor="middle" font-weight="600">${Dd.type==="top"?"podwójny szczyt":"podwójny dołek"}</text></g>`}
+ A.events.forEach(e=>{const i=inv(e.i);if(!vis(i))return;const up=e.key==="golden"||e.key==="breakout",y=up?Y(S.l[i])+30:Y(S.h[i])-22,col=up?"var(--up)":"var(--down)",lab=ANN[e.key].n;
+  g+=`<g data-ann="${e.key}" style="cursor:pointer"><line x1="${X(i)}" x2="${X(i)}" y1="${up?Y(S.l[i])+4:Y(S.h[i])-4}" y2="${y+(up?-10:4)}" stroke="${col}" stroke-width="1"/><text x="${X(i)}" y="${y}" fill="${col}" font-size="10.5" text-anchor="middle" font-weight="600">${lab}</text></g>`});
+ return g}
+function annInfo(key,price){const a=ANN[key];if(!a)return;const el=$("cinfo");el.innerHTML=`<div class="cbox"><p style="margin:0"><b>${a.n}${price?" "+fmt(+price):""}</b></p><p class="small" style="margin:6px 0 0">${a.t}</p></div>`}
+function storyBox(it){const A=it.chart;if(!A)return "";return `<section class="box"><h3>Co teraz widać na wykresie</h3><ul class="sum">${A.story.map(s=>`<li>${esc(s)}</li>`).join("")}</ul>
+ <p class="note">Strona sama analizuje wykres z ostatniego roku. Na wykresie świecowym zaznacza: tło zielone/czerwone (kto ma przewagę), opory i wsparcia (ile razy cena tam zawracała), linię trendu, podwójne szczyty/dołki, wybicia i krzyże średnich. Kliknij element, żeby zobaczyć, co oznacza.</p></section>`}
 
 // ---------- nawigacja ----------
 function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1));
  let v="rynki";const m=h.match(/^i=([^/]+)(?:\/(\w+))?$/);
- if(m)v="detail";else if(["teraz","kalendarz","dziennik","poradnik"].includes(h))v=h;
+ if(m)v="detail";else if(["teraz","kalendarz","dziennik","wyniki","poradnik"].includes(h))v=h;
  document.querySelectorAll(".nav a").forEach(a=>a.setAttribute("aria-current",a.dataset.v===(v==="detail"?"rynki":v)?"page":"false"));
- if(v==="detail")viewDetail(m[1],m[2]);else({rynki:viewRynki,teraz:viewTeraz,kalendarz:viewKalendarz,dziennik:viewDziennik,poradnik:viewPoradnik})[v]();
+ if(v==="detail")viewDetail(m[1],m[2]);else({rynki:viewRynki,teraz:viewTeraz,kalendarz:viewKalendarz,dziennik:viewDziennik,wyniki:viewWyniki,poradnik:viewPoradnik})[v]();
  updBadge();
  if(!m||!m[2])window.scrollTo(0,0)}
 document.addEventListener("click",e=>{const t=e.target;
  const h=t.closest("[data-heart]");if(h){e.stopPropagation();const s=h.dataset.heart;fav=fav.includes(s)?fav.filter(x=>x!==s):[...fav,s];store.set("fav",fav);
   document.querySelectorAll(`[data-heart="${CSS.escape(s)}"]`).forEach(b=>{const f=fav.includes(s);b.setAttribute("aria-pressed",f);b.textContent=f?"♥":"♡"});if($("out"))renderList();updBadge();return}
+ const po=t.closest("[data-pot]");if(po){potH=po.dataset.pot;store.set("potH",potH);route();return}
+ const te=t.closest("[data-test]");if(te){addTest(item(curSym()),te.dataset.test);return}
+ const th=t.closest("[data-th]");if(th){terazH=th.dataset.th;store.set("terazH",terazH);viewTeraz();return}
+ const ao=t.closest("[data-annon]");if(ao){annOn=!annOn;store.set("annOn",annOn);ao.setAttribute("aria-pressed",annOn);drawChart(item(curSym()));return}
+ const ak=t.closest("[data-annk]");if(ak){annInfo(ak.dataset.annk,ak.dataset.ap);return}
  const ad=t.closest("[data-add]");if(ad){requestAdd(ad.dataset.add);return}
  if(t.closest("#addBtn")){const q=$("addQ");requestAdd(q.value);q.value="";$("pend").innerHTML=pendingHtml();return}
  if(t.closest("[data-remove]")){requestRemove(item(curSym()));return}
@@ -588,7 +698,7 @@ document.addEventListener("click",e=>{const t=e.target;
  const o=t.closest("[data-open]");if(o){location.hash="i="+encodeURIComponent(o.dataset.open);return}
  if(t.closest("[data-back]")){history.length>1?history.back():(location.hash="#rynki");return}
  const tb=t.closest("[data-tab]");if(tb){const m=decodeURIComponent(location.hash.slice(1)).match(/^i=([^/]+)/);if(m){history.replaceState(null,"","#i="+encodeURIComponent(m[1])+"/"+tb.dataset.tab);route();window.scrollTo(0,$("tab").offsetTop-120)}return}
- const r=t.closest("[data-r]");if(r){range=r.dataset.r;store.set("range2",range);document.querySelectorAll("[data-r]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.r===range));drawChart(item(curSym()));return}
+ const r=t.closest("[data-r]");if(r){range=r.dataset.r;selCandle=null;store.set("range2",range);document.querySelectorAll("[data-r]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.r===range));drawChart(item(curSym()));return}
  const n=t.closest("[data-n]");if(n){ntab=n.dataset.n;document.querySelectorAll("[data-n]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.n===ntab));renderNews(item(curSym()));return}
  const l=t.closest("[data-list]");if(l){listTab=l.dataset.list;document.querySelectorAll("[data-list]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.list===listTab));renderList();return}
  const cs=t.closest("[data-cs]");if(cs){calScope=cs.dataset.cs;viewKalendarz();return}
@@ -602,5 +712,5 @@ document.addEventListener("keydown",e=>{const o=e.target.closest&&e.target.close
 const curSym=()=>(decodeURIComponent(location.hash.slice(1)).match(/^i=([^/]+)/)||[])[1];
 window.addEventListener("hashchange",route);
 let rt;window.addEventListener("resize",()=>{clearTimeout(rt);rt=setTimeout(()=>{const it=curSym()&&item(curSym());if(it&&$("cw"))drawChart(it)},150)});
-fetch("data.json?"+Date.now()).then(r=>r.json()).then(d=>{D=d;if(!location.hash)history.replaceState(null,"","#rynki");route()})
+loadData().then(d=>{D=d;resolveTests();if(!location.hash)history.replaceState(null,"","#teraz");route()})
  .catch(()=>{$("app").innerHTML='<div class="msg" style="margin-top:20px">Nie udało się wczytać danych (data.json). Spróbuj odświeżyć stronę za chwilę.</div>'});

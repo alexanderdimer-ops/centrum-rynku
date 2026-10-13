@@ -6,9 +6,10 @@ Wszystko z darmowych źródeł bez kluczy API:
 - newsy: Google News RSS (świat po angielsku i Polska) + Bankier.pl RSS (w tym komunikaty ESPI).
 Opcjonalnie wysyła powiadomienia na telefon przez ntfy.sh (sekret NTFY_TOPIC w GitHubie).
 """
-import json, math, os, re, sys, statistics as st, urllib.request, urllib.parse, datetime as dt
+import json, math, os, re, sys, time, hashlib, statistics as st, urllib.request, urllib.parse, datetime as dt
 import email.utils
 import xml.etree.ElementTree as ET
+import track
 from collections import Counter
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -112,10 +113,24 @@ PERIOD = {"m/m": " (miesiąc do miesiąca)", "y/y": " (rok do roku)", "q/q": " (
 
 
 # ---------- pomocnicze ----------
-def get(url, timeout=30):
-    return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout).read()
+CACHE_DIR = os.environ.get("CACHE_DIR", ".cache")
 
-def get_json(url): return json.loads(get(url))
+def get(url, timeout=30, ttl=0):
+    """Pobiera adres. ttl > 0: użyj zapisanej kopii, jeśli jest młodsza niż ttl sekund."""
+    f = os.path.join(CACHE_DIR, hashlib.md5(url.encode()).hexdigest())
+    if ttl:
+        try:
+            if time.time() - os.path.getmtime(f) < ttl:
+                return open(f, "rb").read()
+        except OSError:
+            pass
+    data = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout).read()
+    if ttl:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        open(f, "wb").write(data)
+    return data
+
+def get_json(url, ttl=0): return json.loads(get(url, ttl=ttl))
 def phi(x): return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 def clamp(p): return round(max(5, min(95, p)), 1)
 def mean(x): return sum(x) / len(x)
@@ -151,21 +166,33 @@ def history(sym, rng="5y"):
         return _cache[(sym, rng)]
     if rng != "5y" and (sym, "5y") in _cache:
         return _cache[(sym, "5y")]
-    d = get_json(chart_url(sym, rng, "1d"))["chart"]["result"][0]
+    d = get_json(chart_url(sym, rng, "1d"), ttl=1800 if rng == "5y" else 3600)["chart"]["result"][0]
     q = d["indicators"]["quote"][0]
     by_day, vol = {}, {}
     for t, o, h, l, c, v in zip(d["timestamp"], q["open"], q["high"], q["low"], q["close"], q["volume"]):
         if c is not None:  # Yahoo czasem dubluje ostatni dzień: zostaje najnowszy wpis
             day = dt.datetime.fromtimestamp(t, dt.timezone.utc).date()
             by_day[day], vol[day] = (o or c, h or c, l or c, c), v or 0
+    if rng == "5y":
+        try:
+            r5 = get_json(chart_url(sym, "5d", "1d"))["chart"]["result"][0]
+            q5 = r5["indicators"]["quote"][0]
+            for t, o, h, l, c, v in zip(r5["timestamp"], q5["open"], q5["high"], q5["low"], q5["close"], q5["volume"]):
+                if c is not None:
+                    day = dt.datetime.fromtimestamp(t, dt.timezone.utc).date()
+                    by_day[day], vol[day] = (o or c, h or c, l or c, c), v or 0
+            d["meta"] = r5["meta"] | {k: v for k, v in d["meta"].items() if k in ("longName", "shortName")}
+        except Exception as e:
+            print("Brak świeżych notowań, używam zapisanych:", sym, e)
     days = sorted(by_day)
     # Yahoo potrafi "zamrozić" ceny dzienne (np. akcje GPW): ta sama cena i zerowy obrót.
     # Wtedy ostatnie dni odbudowujemy z danych godzinowych, które są aktualne.
-    k = len(days) - 1
-    while k > 0 and vol[days[k]] == 0 and by_day[days[k]][3] == by_day[days[k - 1]][3]:
-        k -= 1
+    # szukamy zamrożonych dni w całym ostatnim miesiącu (nie tylko na końcu – świeży dzień mógł już dojść)
+    frozen = [j for j in range(max(1, len(days) - 30), len(days))
+              if vol[days[j]] == 0 and by_day[days[j]][3] == by_day[days[j - 1]][3]]
+    k = frozen[0] - 1 if frozen else len(days) - 1
     if k < len(days) - 1:
-        hd = get_json(chart_url(sym, "1mo", "60m"))["chart"]["result"][0]
+        hd = get_json(chart_url(sym, "1mo", "60m"), ttl=240)["chart"]["result"][0]
         hq, agg, hv = hd["indicators"]["quote"][0], {}, {}
         for t, o, h, l, c, v in zip(hd["timestamp"], hq["open"], hq["high"], hq["low"], hq["close"], hq["volume"]):
             if c is not None:
@@ -356,10 +383,8 @@ def macro_title(title, cur):
 def macro_events(instruments, prev_cal):
     old = [e for e in prev_cal if e["kind"] == "makro" and dt.datetime.fromisoformat(e["date"]) > NOW - dt.timedelta(days=1)]
     # ForexFactory prosi o rzadkie pobieranie: raz na godzinę, w pozostałych przebiegach używamy zapisanych danych
-    if old and NOW.minute >= 15:
-        return old
     try:
-        data = get_json("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
+        data = get_json("https://nfs.faireconomy.media/ff_calendar_thisweek.json", ttl=3600)
     except Exception as e:
         print("Kalendarz makro: używam zapisanych danych,", e); return old
     out = []
@@ -385,7 +410,7 @@ def macro_events(instruments, prev_cal):
     return out
 
 def bankier_events(ins):
-    s = get(f"https://www.bankier.pl/gielda/notowania/akcje/{ins['bankier']}/kalendarium").decode("utf-8", "ignore")
+    s = get(f"https://www.bankier.pl/gielda/notowania/akcje/{ins['bankier']}/kalendarium", ttl=21600).decode("utf-8", "ignore")
     out = []
     for m in re.finditer(r'data-timestamp="(\d+)"(.*?)(?=data-timestamp="|$)', s, re.S):
         day = dt.datetime.fromtimestamp(int(m.group(1)) + 4 * 3600, dt.timezone.utc).date()  # północ w Polsce
@@ -403,7 +428,7 @@ def bankier_events(ins):
     return out
 
 def nasdaq_earnings(ins):
-    txt = get_json(f"https://api.nasdaq.com/api/analyst/{ins['symbol']}/earnings-date")["data"]["reportText"] or ""
+    txt = get_json(f"https://api.nasdaq.com/api/analyst/{ins['symbol']}/earnings-date", ttl=21600)["data"]["reportText"] or ""
     m = re.search(r"on\s+(\d{2})/(\d{2})/(\d{4})\s*(after market close|before market open)?", txt)
     if not m:
         return []
@@ -454,9 +479,9 @@ def parse_date(s):
     except Exception:
         return None
 
-def rss(url, desc=True, source=None):
+def rss(url, desc=True, source=None, ttl=600):
     items = []
-    for it in ET.fromstring(get(url)).iter("item"):
+    for it in ET.fromstring(get(url, ttl=ttl)).iter("item"):
         title, src = (it.findtext("title") or "").strip(), (it.findtext("source") or "").strip()
         if src and title.endswith(" - " + src):
             title = title[:-len(src) - 3]
@@ -473,7 +498,7 @@ def tone(text):
 
 def google(q, lang):
     loc = "hl=en-US&gl=US&ceid=US:en" if lang == "en" else "hl=pl&gl=PL&ceid=PL:pl"
-    return rss(f"https://news.google.com/rss/search?q={urllib.parse.quote(q + ' when:14d')}&{loc}", desc=False)
+    return rss(f"https://news.google.com/rss/search?q={urllib.parse.quote(q + ' when:14d')}&{loc}", desc=False, ttl=900)
 
 def instrument_news(ins, bankier):
     kind = market_kind(ins["symbol"], ins["group"])
@@ -768,7 +793,7 @@ def candle_patterns(H, hzn=3, keep=260):
 # ---------- szansa w najbliższych godzinach ----------
 def hourly_chance(sym, hz=4):
     """Szansa, że za ok. 4 godziny handlu cena będzie wyżej – z historii świec godzinowych (6 miesięcy)."""
-    d = get_json(chart_url(sym, "6mo", "60m"))["chart"]["result"][0]
+    d = get_json(chart_url(sym, "6mo", "60m"), ttl=1500)["chart"]["result"][0]
     c = [x for x in d["indicators"]["quote"][0]["close"] if x is not None]
     n = len(c)
     if n < 200:
@@ -943,6 +968,271 @@ def potential(H, rc, setups, news_tone, soon_days, risk_lvl, p_hours, pats):
         score -= 5
     return round(max(0, min(100, score))), plus, minus
 
+# ---------- potencjał krótkoterminowy (1 dzień) i długoterminowy (miesiące) ----------
+def potential_short(H, intra, hours, pats_last, news_24h, event_soon, risk_lvl):
+    """Szanse na najbliższą sesję: godzinowy układ, dzisiejsze tempo, świeca, wiadomości z doby."""
+    c, v, i = H["c"], H.get("v") or [], len(H["c"]) - 1
+    score, plus, minus = 45.0, [], []
+    if hours:
+        d = (hours["p"] - 50) * 1.2
+        score += d
+        if d > 3: plus.append(f"Na wykresie godzinowym podobne sytuacje częściej kończyły się wzrostem ({hours['p']:.0f}%).")
+        if d < -3: minus.append(f"Na wykresie godzinowym podobne sytuacje częściej kończyły się spadkiem (wzrost tylko w {hours['p']:.0f}%).")
+    if intra and len(intra["c"]) > 12:
+        ic = intra["c"]
+        last_hour = ic[-1] / ic[-12] - 1 if len(ic) >= 12 else 0
+        if last_hour > 0.003:
+            score += 5; plus.append("W ostatniej godzinie cena rośnie – krótkoterminowe tempo w górę.")
+        elif last_hour < -0.003:
+            score -= 5; minus.append("W ostatniej godzinie cena spada – krótkoterminowe tempo w dół.")
+    rs = rsi(c, i)
+    if rs < 30:
+        score += 5; plus.append(f"RSI {rs:.0f} – po mocnych spadkach często zdarza się krótkie odbicie.")
+    elif rs > 75:
+        score -= 6; minus.append(f"RSI {rs:.0f} – rynek przegrzany, w krótkim terminie łatwo o cofnięcie.")
+    for k in pats_last:
+        d = PATTERN_DIR.get(k, "neutral")
+        if d == "up":
+            score += 6; plus.append("Ostatnia świeca tworzy formację wzrostową.")
+        elif d == "down":
+            score -= 6; minus.append("Ostatnia świeca tworzy formację spadkową.")
+    if news_24h is not None and abs(news_24h) > 0.1:
+        score += news_24h * 12
+        (plus if news_24h > 0 else minus).append("Wiadomości z ostatniej doby są " + ("pozytywne." if news_24h > 0 else "negatywne."))
+    if len(v) > 21 and v[i] and mean(v[i - 20:i]) > 0 and v[i] / mean(v[i - 20:i]) > 1.5:
+        up_ = c[i] > c[i - 1]
+        score += 5 if up_ else -5
+        (plus if up_ else minus).append(f"Dziś duży obrót przy {'wzroście' if up_ else 'spadku'} ceny.")
+    if event_soon:
+        score -= 10; minus.append(f"{event_soon} – w krótkim terminie cena może skoczyć w dowolną stronę.")
+    if risk_lvl >= 4:
+        score -= 10; minus.append("Bardzo wysoka zmienność.")
+    score = 50 + (score - 45) * 1.6  # rozciągnięcie skali, żeby wyróżniały się naprawdę mocne układy
+    return round(max(0, min(100, score))), plus, minus
+
+def potential_long(H, rc):
+    """Perspektywa kilku miesięcy: długi trend, siła względem rynku, odległość od szczytu, zmienność, historia."""
+    c, i = H["c"], len(H["c"]) - 1
+    score, plus, minus = 45.0, [], []
+    if i < 220:
+        return None, ["Za krótka historia, by ocenić perspektywę długoterminową."], []
+    s200, s200_old = sma(c, i, 200), sma(c, i - 20, 200)
+    if c[i] > s200:
+        score += 10; plus.append("Cena powyżej średniej z 200 dni – długoterminowy trend jest wzrostowy.")
+    else:
+        score -= 10; minus.append("Cena poniżej średniej z 200 dni – długoterminowy trend jest spadkowy.")
+    if s200 > s200_old:
+        score += 6; plus.append("Średnia z 200 dni rośnie – trend długoterminowy się wzmacnia.")
+    else:
+        score -= 4; minus.append("Średnia z 200 dni spada.")
+    m6, m12 = c[i] / c[i - 126] - 1, c[i] / c[i - 250] - 1 if i >= 250 else None
+    if rc and rc[i - 126]:
+        rel = m6 - (rc[i] / rc[i - 126] - 1)
+        if rel > 0.05:
+            score += 6; plus.append(f"W pół roku silniejszy od rynku o {rel * 100:.0f} pkt proc.")
+        elif rel < -0.05:
+            score -= 5; minus.append(f"W pół roku słabszy od rynku o {abs(rel) * 100:.0f} pkt proc.")
+    if m12 is not None:
+        if m12 > 0.1:
+            score += 5; plus.append(f"W rok wzrost o {m12 * 100:.0f}% – silny długi trend.")
+        elif m12 < -0.15:
+            score -= 5; minus.append(f"W rok spadek o {abs(m12) * 100:.0f}%.")
+    hi = max(H["h"][i - 250:i + 1]) if i >= 250 else max(H["h"])
+    dd = c[i] / hi - 1
+    if dd > -0.10:
+        score += 4; plus.append("Cena blisko rocznego szczytu – rynek jest silny.")
+    elif dd < -0.35:
+        score -= 6; minus.append(f"Cena {abs(dd) * 100:.0f}% poniżej rocznego szczytu – trend jest mocno uszkodzony.")
+    sd = st.stdev([c[k] / c[k - 1] - 1 for k in range(i - 119, i + 1)])
+    ann = sd * math.sqrt(252)
+    if ann < 0.30:
+        score += 4; plus.append("Umiarkowana zmienność – łatwiej utrzymać pozycję długo.")
+    elif ann > 0.60:
+        score -= 8; minus.append("Bardzo duża zmienność – trudno wytrzymać długie trzymanie.")
+    # historia: co działo się w ciągu 3 miesięcy w podobnym układzie (nad/pod średnią 200 dni, kierunek pół roku)
+    def st_(k): return (c[k] > sma(c, k, 200), c[k] > c[k - 126])
+    now = st_(i)
+    fw = [c[k + 63] / c[k] - 1 for k in range(200, i - 63) if st_(k) == now]
+    allfw = [c[k + 63] / c[k] - 1 for k in range(200, i - 63)]
+    if len(fw) >= 30 and allfw:
+        up, base = mean([float(x > 0) for x in fw]), mean([float(x > 0) for x in allfw])
+        score += max(-8, min(8, (up - base) * 60))
+        (plus if up >= base else minus).append(
+            f"W historii w podobnym układzie po 3 miesiącach cena była wyżej w {up * 100:.0f}% przypadków (zwykle {base * 100:.0f}%).")
+    return round(max(0, min(100, score))), plus, minus
+
+
+# ---------- samodzielna analiza wykresu (do zaznaczenia na wykresie) ----------
+def rolling_sma(c, n):
+    out, s_ = [None] * len(c), 0.0
+    for k, x in enumerate(c):
+        s_ += x
+        if k >= n:
+            s_ -= c[k - n]
+        if k >= n - 1:
+            out[k] = s_ / n
+    return out
+
+def chart_analysis(H, K=260):
+    """Szuka na wykresie: przewagi kupujących/sprzedających, struktury trendu, poziomów wsparcia i oporu,
+    linii trendu, podwójnych szczytów/dołków, krzyży średnich i wybić. Indeksy odnoszą się do ostatnich K świec."""
+    N = len(H["c"])
+    off = max(0, N - K)
+    s20, s50, s200 = rolling_sma(H["c"], 20), rolling_sma(H["c"], 50), rolling_sma(H["c"], 200)
+    o, h, l, c = H["o"][off:], H["h"][off:], H["l"][off:], H["c"][off:]
+    n = len(c)
+    a = atr(H["h"], H["l"], H["c"], N - 1)
+    tol = max(0.012 * c[-1], 0.8 * a)
+    out = {"regime": [], "levels": [], "events": [], "pivots": [], "trendline": None, "double": None, "story": []}
+    # przewaga kupujących / sprzedających
+    side = []
+    for k in range(n):
+        g = off + k
+        if s20[g] is None or g < 5 or s20[g - 5] is None:
+            side.append(0); continue
+        rising = s20[g] > s20[g - 5]
+        side.append(1 if c[k] > s20[g] and rising else -1 if c[k] < s20[g] and not rising else 0)
+    start = 0
+    for k in range(1, n + 1):
+        if k == n or side[k] != side[start]:
+            if k - start >= 3 and side[start] != 0:
+                out["regime"].append({"from": start, "to": k - 1, "side": side[start]})
+            start = k
+    cur = side[-1]; run = 0
+    for k in range(n - 1, -1, -1):
+        if side[k] != cur: break
+        run += 1
+    # punkty zwrotne (lokalne szczyty i dołki)
+    piv = []
+    for k in range(3, n - 3):
+        if h[k] == max(h[k - 3:k + 4]): piv.append((k, "H", h[k]))
+        if l[k] == min(l[k - 3:k + 4]): piv.append((k, "L", l[k]))
+    out["pivots"] = [{"i": k, "t": t} for k, t, _ in piv[-30:]]
+    # poziomy wsparcia/oporu = miejsca, gdzie cena kilka razy zawracała
+    price = c[-1]
+    cand = []
+    for k, t, p_ in piv:  # siła poziomu = ile punktów zwrotnych leży blisko niego
+        near = [q for q in piv if abs(q[2] - p_) <= tol / 2]
+        cand.append({"price": mean([q[2] for q in near]), "touches": len(near), "last": max(q[0] for q in near)})
+    cand.sort(key=lambda x: (-x["touches"], -x["last"]))
+    lv = []
+    for x in cand:
+        if x["touches"] >= 2 and abs(x["price"] / price - 1) < 0.15 and all(abs(x["price"] - y["price"]) > tol for y in lv):
+            lv.append(x)
+    above = sorted([x for x in lv if x["price"] > price * 1.002], key=lambda x: x["price"])[:2]
+    below = sorted([x for x in lv if x["price"] < price * 0.998], key=lambda x: -x["price"])[:2]
+    for x in above: x["kind"] = "res"
+    for x in below: x["kind"] = "sup"
+    out["levels"] = above + below
+    # struktura trendu
+    hs = [x for x in piv if x[1] == "H"][-2:]; ls = [x for x in piv if x[1] == "L"][-2:]
+    struct = "range"
+    if len(hs) == 2 and len(ls) == 2:
+        if hs[1][2] > hs[0][2] and ls[1][2] > ls[0][2]: struct = "up"
+        elif hs[1][2] < hs[0][2] and ls[1][2] < ls[0][2]: struct = "down"
+    out["structure"] = struct
+    # linia trendu przez dwa ostatnie dołki (trend wzrostowy) lub szczyty (spadkowy)
+    two = ls if struct == "up" else hs if struct == "down" else []
+    if len(two) == 2 and two[1][0] - two[0][0] >= 5:
+        (i1, _, p1), (i2, _, p2) = two
+        slope = (p2 - p1) / (i2 - i1)
+        now_v = p2 + slope * (n - 1 - i2)
+        broken = price < now_v if struct == "up" else price > now_v
+        out["trendline"] = {"i1": i1, "p1": p1, "i2": n - 1, "p2": now_v, "kind": struct, "broken": broken}
+    # podwójny szczyt / dołek (drugi szczyt w ostatnich 40 świecach)
+    for typ, arr in (("top", [x for x in piv if x[1] == "H"]), ("bottom", [x for x in piv if x[1] == "L"])):
+        if len(arr) < 2: continue
+        (k1, _, p1), (k2, _, p2) = arr[-2], arr[-1]
+        if k2 < n - 40 or k2 - k1 < 8 or abs(p1 - p2) > tol: continue
+        mid = min(l[k1:k2 + 1]) if typ == "top" else max(h[k1:k2 + 1])
+        depth = (min(p1, p2) - mid) if typ == "top" else (mid - max(p1, p2))
+        if depth < 2 * a: continue
+        conf = price < mid if typ == "top" else price > mid
+        out["double"] = {"type": typ, "i1": k1, "p1": p1, "i2": k2, "p2": p2, "neck": mid, "confirmed": conf}
+    # krzyże średnich 50/200 i wybicia
+    for k in range(1, n):
+        g = off + k
+        if None not in (s50[g], s200[g], s50[g - 1], s200[g - 1]):
+            if s50[g - 1] <= s200[g - 1] and s50[g] > s200[g]:
+                out["events"].append({"i": k, "key": "golden"})
+            if s50[g - 1] >= s200[g - 1] and s50[g] < s200[g]:
+                out["events"].append({"i": k, "key": "death"})
+    brk = []
+    for k in range(21, n):
+        hi20, lo20 = max(h[k - 20:k]), min(l[k - 20:k])
+        if c[k] > hi20 and c[k - 1] <= max(h[k - 21:k - 1]): brk.append({"i": k, "key": "breakout"})
+        if c[k] < lo20 and c[k - 1] >= min(l[k - 21:k - 1]): brk.append({"i": k, "key": "breakdown"})
+    out["events"] += brk[-4:]
+    out["events"].sort(key=lambda e: e["i"])
+    # opis w prostych słowach
+    S = out["story"]
+    if cur == 1:
+        S.append(f"Od {run} sesji przewagę mają kupujący: cena jest nad rosnącą średnią z 20 dni.")
+    elif cur == -1:
+        S.append(f"Od {run} sesji przewagę mają sprzedający: cena jest pod opadającą średnią z 20 dni.")
+    else:
+        S.append("Teraz żadna strona nie ma wyraźnej przewagi – rynek waha się bez kierunku.")
+    S.append({"up": "Struktura trendu wzrostowa: każdy kolejny szczyt i dołek jest wyżej od poprzedniego.",
+              "down": "Struktura trendu spadkowa: kolejne szczyty i dołki są coraz niżej.",
+              "range": "Brak wyraźnej struktury trendu – cena porusza się w konsolidacji (w bok)."}[struct])
+    for x in above[:1]:
+        S.append(f"Najbliższy opór: {fp(x['price'])} ({(x['price'] / price - 1) * 100:.1f}% wyżej) – cena zawracała tam {x['touches']} razy. "
+                 "Przebicie go w górę byłoby sygnałem siły.".replace(".", ",", 1))
+    for x in below[:1]:
+        S.append(f"Najbliższe wsparcie: {fp(x['price'])} ({(1 - x['price'] / price) * 100:.1f}% niżej) – tam {x['touches']} razy pojawiali się kupujący. "
+                 "Spadek pod nie byłby sygnałem słabości.".replace(".", ",", 1))
+    tl = out["trendline"]
+    if tl:
+        if tl["kind"] == "up":
+            S.append(f"Linia trendu wzrostowego jest teraz w okolicy {fp(tl['p2'])}. " +
+                     ("Cena właśnie ją przebiła w dół – to ostrzeżenie." if tl["broken"] else "Dopóki cena jest nad nią, trend wzrostowy trwa."))
+        else:
+            S.append(f"Linia trendu spadkowego jest teraz w okolicy {fp(tl['p2'])}. " +
+                     ("Cena przebiła ją w górę – możliwy koniec spadków." if tl["broken"] else "Dopóki cena jest pod nią, trend spadkowy trwa."))
+    db = out["double"]
+    if db:
+        if db["type"] == "top":
+            S.append(f"Podwójny szczyt w okolicy {fp(db['p2'])}: cena dwa razy nie dała rady przebić tego poziomu. " +
+                     (f"Potwierdzony – cena spadła pod {fp(db['neck'])}, to sygnał spadkowy." if db["confirmed"] else f"Potwierdzeniem byłby spadek pod {fp(db['neck'])}."))
+        else:
+            S.append(f"Podwójny dołek w okolicy {fp(db['p2'])}: cena dwa razy odbiła się od tego poziomu. " +
+                     (f"Potwierdzony – cena wybiła się nad {fp(db['neck'])}, to sygnał wzrostowy." if db["confirmed"] else f"Potwierdzeniem byłoby wybicie nad {fp(db['neck'])}."))
+    gc = [e for e in out["events"] if e["key"] in ("golden", "death")]
+    if gc:
+        e = gc[-1]; ago_ = n - 1 - e["i"]
+        S.append(("Złoty krzyż" if e["key"] == "golden" else "Krzyż śmierci") + f" {ago_} sesji temu: średnia z 50 dni przecięła średnią z 200 dni " +
+                 ("w górę – sygnał długoterminowej siły." if e["key"] == "golden" else "w dół – sygnał długoterminowej słabości."))
+    return out
+
+# ---------- test na historii całej strategii (wirtualne transakcje w przeszłości) ----------
+def hist_sim(H, S, max_days=10):
+    """Gdyby strona działała przez ostatnie lata: wejście, gdy spełnione są warunki wzrostu,
+    stop 2×ATR, cel 3×ATR, wyjście najpóźniej po 10 sesjach. Dla porównania: wejście w losowe (każde) dni."""
+    c, h, l, n = H["c"], H["h"], H["l"], len(H["c"])
+    def trade(i):
+        a = atr(h, l, c, i); stop, tgt = c[i] - 2 * a, c[i] + 3 * a
+        for k in range(i + 1, min(n, i + 1 + max_days)):
+            if l[k] <= stop: return -1.0, k
+            if h[k] >= tgt: return 1.5, k
+        k = min(n - 1, i + max_days)
+        return (c[k] - c[i]) / (2 * a), k
+    sig, every, i = [], [], 220
+    busy_until = 0
+    for i in range(220, n - max_days):
+        R_, _ = trade(i)
+        every.append(R_)
+        if i <= busy_until:
+            continue
+        ok = [c[i] > sma(c, i, 50), c[i] > sma(c, i, 20), 50 <= rsi(c, i) <= 70, c[i] > max(h[i - 20:i])]
+        if S["rc"]:
+            p_, _ = m_ref(S["r"], S["rr"], S["rc"], i)
+            ok.append(p_ is not None and p_ > 50)
+        if sum(ok) >= len(ok) - 1:
+            R_, k = trade(i); sig.append(R_); busy_until = k
+    def stat(x): return None if not x else {"n": len(x), "win": sum(r > 0 for r in x) / len(x), "avgR": mean(x)}
+    return {"signal": stat(sig), "every": stat(every)}
+
+
 def vol_level(ann): return 1 if ann < 0.15 else 2 if ann < 0.35 else 3 if ann < 0.60 else 4
 RISK_LABEL = ["Niskie", "Umiarkowane", "Wysokie", "Bardzo wysokie"]
 
@@ -975,7 +1265,7 @@ def market_movers():
                 "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=day_gainers&count=15",
                 "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds=most_actives&count=15"):
         try:
-            for q in get_json(url)["finance"]["result"][0]["quotes"]:
+            for q in get_json(url, ttl=1800)["finance"]["result"][0]["quotes"]:
                 if q.get("marketCap", 1e12) >= 2e9 and q.get("regularMarketPrice", 10) >= 5:
                     syms.append(q["symbol"])
         except Exception as e:
@@ -983,7 +1273,7 @@ def market_movers():
     return syms
 
 def scan(prev_scan, own):
-    if prev_scan and NOW.minute >= 15 and dt.datetime.fromisoformat(prev_scan["time"]) > NOW - dt.timedelta(hours=2):
+    if prev_scan and dt.datetime.fromisoformat(prev_scan["time"]) > NOW - dt.timedelta(minutes=29):
         return prev_scan  # skaner działa raz na godzinę
     syms = list(dict.fromkeys(UNIVERSE + market_movers()))
     out = []
@@ -1004,11 +1294,15 @@ def scan(prev_scan, own):
             setups = setup_history(S, 7 if crypto else 5)
             pats = patterns_at(H["o"], H["h"], H["l"], c, n - 1) + patterns_at(H["o"], H["h"], H["l"], c, n - 2)
             score, plus, minus = potential(H, rc, setups, None, None, vol_level(ann), None, pats)
+            ps_ = potential_short(H, None, None, patterns_at(H["o"], H["h"], H["l"], c, n - 1), None, None, vol_level(ann))
+            pl_ = potential_long(H, rc)
             a = atr(H["h"], H["l"], c, n - 1)
             out.append({"symbol": sym, "name": H["name"], "group": group, "currency": H["cur"], "price": c[-1],
                         "change": (c[-1] / c[-2] - 1) * 100, "score": score, "plus": plus, "minus": minus,
                         "risk": vol_level(ann), "risk_label": RISK_LABEL[vol_level(ann) - 1], "ann": ann,
                         "stop": c[-1] - 2 * a, "target": c[-1] + 3 * a, "own": sym in own, "pats": pats,
+                        "short": {"score": ps_[0], "plus": ps_[1], "minus": ps_[2]},
+                        "long": {"score": pl_[0], "plus": pl_[1], "minus": pl_[2]},
                         "spark": [float(f"{x:.6g}") for x in c[-30:]]})
         except Exception as e:
             print("Skaner pominął", sym, e)
@@ -1057,7 +1351,7 @@ WORLD_Q = [("stock market today", "en", "stocks"), ("Federal Reserve interest ra
            ("giełda GPW WIG20", "pl", "stocks")]
 
 def world_news(prev_world, instruments):
-    if prev_world and NOW.minute >= 15 and dt.datetime.fromisoformat(prev_world["time"]) > NOW - dt.timedelta(hours=2):
+    if prev_world and dt.datetime.fromisoformat(prev_world["time"]) > NOW - dt.timedelta(minutes=29):
         return prev_world
     seen, out = set(), []
     for q, lang, kind in WORLD_Q:
@@ -1079,6 +1373,38 @@ def world_news(prev_world, instruments):
             print("Wiadomości ze świata pominięte:", q, e)
     out.sort(key=lambda x: x["date"], reverse=True)
     return {"time": NOW.isoformat(), "items": out[:14]}
+
+
+# ---------- propozycje „Teraz warto” (krótko / średnio / długo) ----------
+def build_picks(items, scan_items, tr):
+    own = {it["symbol"] for it in items}
+    cands = []
+    for it in items:
+        P = it["potential"]
+        cands.append({"symbol": it["symbol"], "name": it["name"], "group": it["group"], "currency": it["currency"],
+                      "price": it["price"], "change": it["change"], "risk": it["risk"]["level"],
+                      "risk_label": it["risk"]["label"], "stop": it["plan"]["stop"], "target": it["plan"]["target"],
+                      "own": True, "dec": it["decision"]["key"], "spark": it["hist"]["c"][-30:],
+                      "news": [n for n in it["news"]["week"]["items"] if n.get("dir") != "neutral"][:2],
+                      "mid": {"score": P["score"], "plus": P["plus"], "minus": P["minus"]},
+                      "short": P["short"], "long": P["long"]})
+    for x in scan_items:
+        if x["symbol"] in own:
+            continue
+        cands.append(dict({k: x.get(k) for k in ("symbol", "name", "group", "currency", "price", "change", "risk",
+                                                  "risk_label", "stop", "target", "spark", "news", "earnings_days")},
+                          own=False, dec=None, mid={"score": x["score"], "plus": x["plus"], "minus": x["minus"]},
+                          short=x.get("short"), long=x.get("long")))
+    out = {}
+    for h in ("short", "mid", "long"):
+        thr = track.pick_threshold(tr, h)
+        ok = [c for c in cands if c.get(h) and c[h]["score"] is not None and c[h]["score"] >= thr
+              and c["risk"] <= 3 and c["dec"] != "no"]
+        ok.sort(key=lambda c: -c[h]["score"])
+        out[h] = [dict({k: v for k, v in c.items() if k not in ("short", "mid", "long")}, **c[h]) for c in ok[:8]]
+        out[h + "_risky"] = sum(1 for c in cands if c.get(h) and (c[h]["score"] or 0) >= thr and c["risk"] >= 4)
+        out[h + "_thr"] = thr
+    return out
 
 
 # ---------- zmiany od ostatniej aktualizacji ----------
@@ -1223,6 +1549,16 @@ def analyze(ins, bankier, cal, vix):
     pot, plus, minus = potential(H, S["rc"], setups, week["tone"] if week["count"] else None, earn, risk["level"],
                                  hours["p"] if hours else None, last_pats)
     K = 260
+    news24 = [x for x in news if x["age"] <= 1]
+    tone24 = (mean([{"up": 0.6, "down": -0.6}.get(x["dir"], 0) * 0.5 + x["tone"] * 0.5 for x in news24])
+              if news24 else None)
+    ev1 = next((e["title"] for e in my_events if 0 <= e["days"] <= 1 and e["impact"] == "high"), None)
+    pot_s = potential_short(H, intra, hours, [x["key"] for x in pats if x["i"] >= 259], tone24, ev1, risk["level"])
+    pot_l = potential_long(H, S["rc"])
+    chart = chart_analysis(H, K)
+    simh = hist_sim(H, S)
+    live = crypto or bool(intra and NOW.timestamp() - intra["t"][-1] < 1800)
+    p_month = next((a["p"] * 100 for a in an if a["label"] == "miesiąc"), None)
 
     t0 = days[0].toordinal()
     return {"symbol": ins["symbol"], "name": ins["name"], "group": ins["group"], "currency": H["cur"],
@@ -1241,7 +1577,11 @@ def analyze(ins, bankier, cal, vix):
             "cfd": {"lev": ins.get("lev", 5), "spread": ins.get("spread", 0.1), "lot": ins.get("lot"),
                     "unit": ins.get("unit", "szt.")},
             "intra": intra, "hours": hours,
-            "potential": {"score": pot, "plus": plus, "minus": minus},
+            "potential": {"score": pot, "plus": plus, "minus": minus,
+                          "short": {"score": pot_s[0], "plus": pot_s[1], "minus": pot_s[2]},
+                          "long": {"score": pot_l[0], "plus": pot_l[1], "minus": pot_l[2]}},
+            "chart": chart, "sim_hist": simh, "live_price": live,
+            "p_month": None if p_month is None else round(p_month, 1),
             "ohlc": {"o": [float(f"{x:.6g}") for x in H["o"][-K:]], "h": [float(f"{x:.6g}") for x in H["h"][-K:]],
                      "l": [float(f"{x:.6g}") for x in H["l"][-K:]], "c": [float(f"{x:.6g}") for x in c[-K:]],
                      "dd": [d.toordinal() - t0 for d in days[-K:]]},
@@ -1310,6 +1650,9 @@ if __name__ == "__main__":
             items.append(analyze(ins, bankier, cal, vix))
         except Exception as e:
             print("Pominięto", ins["symbol"], repr(e))
+            old = next((x for x in (prev or {}).get("items", []) if x["symbol"] == ins["symbol"]), None)
+            if old:  # lepiej pokazać ostatnie znane dane niż zgubić instrument ze strony
+                old["stale"] = True; old["live_price"] = False; items.append(old)
     fx = {"PLN": 1.0}
     for cur, sym in (("USD", "PLN=X"), ("EUR", "EURPLN=X")):
         try:
@@ -1319,12 +1662,35 @@ if __name__ == "__main__":
     names = {i["symbol"]: i["name"] for i in instruments}
     for e in cal:
         e["names"] = [names[s] for s in e["symbols"] if s in names]
-    changes, new_changes = detect_changes(items, prev)
     sc = scan((prev or {}).get("scan"), {i["symbol"] for i in instruments})
+    tr = track.load()
+    for it in items:  # korekta szans na podstawie własnych, rozliczonych przewidywań
+        it["cal"] = {}
+        for hz, path in (("4h", ("hours", "p")), ("1d", ("overall",)), ("1w", ("p_week",)), ("1m", ("p_month",))):
+            obj = it
+            for k in path[:-1]:
+                obj = obj.get(k) or {}
+            if obj.get(path[-1]) is not None:
+                new, info = track.calibrate(tr, hz, obj[path[-1]])
+                if info:
+                    obj[path[-1]] = new; it["cal"][hz] = info
+    picks = build_picks(items, sc["items"], tr)
+    changes, new_changes = detect_changes(items, prev)
     world = world_news((prev or {}).get("world"), instruments)
     notify(items, new_changes)
+    names = {i["symbol"]: i["name"] for i in items} | {x["symbol"]: x["name"] for x in sc["items"]}
+    tr = track.update(tr, NOW, items, sc["items"], {h: picks[h] for h in ("short", "mid", "long")})
+    track.save(tr)
+    hs = [it["sim_hist"] for it in items if it.get("sim_hist") and it["sim_hist"]["signal"]]
+    def agg(key):
+        rows = [x[key] for x in hs if x[key]]
+        n_ = sum(r["n"] for r in rows)
+        return None if not n_ else {"n": n_, "win": sum(r["win"] * r["n"] for r in rows) / n_,
+                                     "avgR": sum(r["avgR"] * r["n"] for r in rows) / n_}
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items,
-                   "changes": changes, "scan": sc, "world": world},
+                   "changes": changes, "scan": sc, "world": world, "picks": picks,
+                   "track": track.summary(tr, names),
+                   "hist_test": {"signal": agg("signal"), "every": agg("every"), "instruments": len(hs)}},
                   f, ensure_ascii=False, separators=(",", ":"))
     print("Zapisano", len(items), "instrumentów,", len(cal), "wydarzeń w kalendarzu")

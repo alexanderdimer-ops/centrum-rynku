@@ -64,7 +64,7 @@ def add(q, items):
         entry["macro"] = ["EUR"]
     items.append(entry)
     return (f"Dodano: **{name}** ({sym}, {hit.get('exchDisp', '')}, grupa „{group}”). "
-            "Pełna analiza pojawi się na stronie za ok. 2–3 minuty.")
+            "Pełna analiza pojawi się na stronie za ok. 3–5 minut (odśwież stronę).")
 
 
 def remove(q, items):

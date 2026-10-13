@@ -1,8 +1,9 @@
 name: Aktualizacja danych
+# Co godzinę startuje pętla, która przez ok. 55 minut odświeża dane mniej więcej co 5 minut
+# i publikuje je na gałęzi "dane" (strona pobiera je stamtąd). W nocy i w weekendy: jeden przebieg na godzinę.
 on:
   schedule:
-    - cron: "*/15 * * * 1-5"   # dni robocze: co 15 minut
-    - cron: "7 */2 * * 0,6"    # weekend: co 2 godziny (Bitcoin handluje całą dobę)
+    - cron: "0 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
@@ -12,16 +13,37 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python fetch_data.py
+      - name: Pobierz poprzednie dane i wyniki testów
+        run: |
+          git fetch -q origin dane || true
+          git show origin/dane:data.json > /tmp/d.json 2>/dev/null && mv /tmp/d.json data.json || true
+          git show origin/dane:track.json > /tmp/t.json 2>/dev/null && mv /tmp/t.json track.json || true
+      - name: Aktualizuj w pętli
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-      - run: |
-          git config user.name "dane-bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add data.json
-          git diff --staged --quiet || (git commit -m "Aktualizacja danych" && (git push || (git pull --rebase -X theirs origin main && git push)))
+          GH_TOKEN: ${{ github.token }}
+          CACHE_DIR: ${{ runner.temp }}/cache
+        run: |
+          publish() {
+            d=$(mktemp -d)
+            cp data.json "$d"/ && { cp track.json "$d"/ 2>/dev/null || true; }
+            (cd "$d" && git init -q -b dane && git add . \
+              && git -c user.name=dane-bot -c user.email=bot@users.noreply.github.com commit -qm "Dane $(date -u +%H:%M)" \
+              && git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" dane)
+            rm -rf "$d"
+          }
+          end=$((SECONDS + 3300))
+          while :; do
+            git fetch -q origin main && git checkout -q origin/main -- instruments.json || true  # nowe instrumenty od razu
+            python fetch_data.py || echo "Przebieg nieudany"
+            publish || echo "Publikacja nieudana"
+            h=$(date -u +%H); dow=$(date -u +%u)
+            if [ $SECONDS -ge $end ] || [ "$dow" -ge 6 ] || [ "$h" -ge 22 ] || [ "$h" -lt 6 ]; then break; fi
+            sleep 200
+          done
