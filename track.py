@@ -31,6 +31,27 @@ def _stat(tr, key):
     return tr["stats"].setdefault(key, {"n": 0, "hit": 0, "up": 0, "ret": 0.0, "bins": [[0, 0] for _ in BINS], "sym": {}})
 
 
+def _day(tr, now, key, hit):
+    """Licznik dzienny (data rozliczenia) – z niego powstają wyniki dzień po dniu, tydzień i miesiąc."""
+    d = tr["stats"].setdefault("daily", {}).setdefault(now.date().isoformat(), {})
+    a = d.setdefault(key, [0, 0]); a[0] += 1; a[1] += bool(hit)
+
+
+def log(tr, now, text, kind="info"):
+    L = tr.setdefault("log", [])
+    if L and L[-1]["text"] == text:
+        return
+    L.append({"t": now.isoformat(), "text": text, "kind": kind})
+    tr["log"] = L[-200:]
+
+
+def rule_status(tr, rid):
+    n, hit = tr["stats"].get("rules", {}).get(rid, [0, 0])
+    if n >= 15 and hit / n >= 0.65: return "confirmed", n, hit
+    if n >= 15 and hit / n < 0.5: return "rejected", n, hit
+    return "live", n, hit
+
+
 def calibrate(tr, hz, p):
     """Korekta szansy na podstawie własnych, rozliczonych przewidywań (gdy jest ich dość w danym przedziale)."""
     s = tr["stats"].get("pred_" + hz)
@@ -73,6 +94,7 @@ def update(tr, now, items, scan_items, picks_now):
                 if lo <= p["p"] < hi:
                     s["bins"][b][0] += 1; s["bins"][b][1] += up
             sy = s["sym"].setdefault(p["s"], [0, 0]); sy[0] += 1; sy[1] += (p["p"] > 50) == up
+            _day(tr, now, "pred_" + p["h"], (p["p"] > 50) == up)
 
     # 2. zapisz nowe przewidywania (tylko gdy rynek jest otwarty – świeża cena)
     last = {}
@@ -118,6 +140,8 @@ def update(tr, now, items, scan_items, picks_now):
         if res:
             x.update(end=now.isoformat(), res=res, exit=ex, R=round((ex - x["px"]) / risk, 2) if risk > 0 else 0)
             s = _stat(tr, "sim"); s["n"] += 1; s["hit"] += x["R"] > 0; s["ret"] += x["R"]
+            _day(tr, now, "sim", x["R"] > 0)
+            log(tr, now, f"Wirtualna transakcja {x.get('n', x['s'])} zamknięta: {x['R']:+.2f} R ({x['res']}).", "sim")
     for it in items:
         if it["decision"]["key"] == "go" and it["symbol"] not in open_syms and it.get("live_price"):
             tr["sims"].append({"s": it["symbol"], "n": it["name"], "t": now.isoformat(), "px": it["price"],
@@ -129,6 +153,7 @@ def update(tr, now, items, scan_items, picks_now):
             if x["s"] in prices:
                 x.update(res=prices[x["s"]], ret=prices[x["s"]] / x["px"] - 1)
                 s = _stat(tr, "pick_" + x["h"]); s["n"] += 1; s["hit"] += x["ret"] > 0; s["ret"] += x["ret"]
+                _day(tr, now, "pick", x["ret"] > 0)
             elif now - dt.datetime.fromisoformat(x["due"]) > dt.timedelta(days=3):
                 x.update(res=0, ret=None)  # brak ceny – pomijamy
     lastp = {}
@@ -141,7 +166,61 @@ def update(tr, now, items, scan_items, picks_now):
             tr["picks"].append({"s": c["symbol"], "n": c["name"], "h": h, "t": now.isoformat(),
                                 "due": (now + PICK_HZ[h]).isoformat(), "px": c["price"], "score": c["score"]})
 
-    # 5. porządki: trzymamy ostatnie wpisy (liczniki w stats zostają)
+    # 5. strategie odkryte przez stronę: zapis, gdy reguła „zadziałała”, rozliczenie po sesji
+    R = tr.setdefault("rules_log", [])
+    seen = {(x["rid"], x["day"]) for x in R}
+    rs = tr["stats"].setdefault("rules", {})
+    for x in R:
+        if x.get("res") is not None or x["s"] not in by_sym:
+            continue
+        it = by_sym[x["s"]]; O = it["ohlc"]; t0 = it["hist"]["t0"]
+        dates = [dt.date.fromordinal(t0 + dd).isoformat() for dd in O["dd"]]
+        if x["day"] not in dates:
+            if now - dt.datetime.fromisoformat(x["t"]) > dt.timedelta(days=12): x["res"] = "brak"
+            continue
+        k = dates.index(x["day"]); last = len(dates) - 1
+        done = lambda q: q < last or (q == last and not it.get("live_price") and dates[q] < now.date().isoformat())
+        out = None
+        if x["type"] in ("intra", "rest") and done(k):
+            out = O["c"][k] > x["px"]
+        elif x["type"] == "next" and k + 1 <= last and done(k + 1):
+            out = O["c"][k + 1] > O["c"][k]
+        elif x["type"] == "week" and k + 5 <= last and done(k + 5):
+            out = O["c"][k + 5] > O["c"][k]
+        if out is None:
+            continue
+        hit = out == (x["dir"] == "up")
+        x["res"] = "trafiona" if hit else "chybiona"
+        a = rs.setdefault(x["rid"], [0, 0]); a[0] += 1; a[1] += hit
+        _day(tr, now, "rule", hit)
+        st_, n_, h_ = rule_status(tr, x["rid"])
+        prev_st = tr.setdefault("rule_state", {}).get(x["rid"], "live")
+        if st_ != prev_st:
+            tr["rule_state"][x["rid"]] = st_
+            if st_ == "confirmed":
+                log(tr, now, f"Reguła potwierdzona na żywo ({h_}/{n_} = {100 * h_ / n_:.0f}%): {x['name']} – {x['text']}.", "good")
+            elif st_ == "rejected":
+                log(tr, now, f"Reguła odrzucona – na żywo trafiła tylko {h_}/{n_}: {x['name']} – {x['text']}.", "bad")
+    known = tr.setdefault("rules_known", {})
+    for it in items:
+        S_ = it.get("strategies") or {}
+        for r in S_.get("rules", []):
+            if r["id"] + "|" + it["symbol"] not in known:
+                known[r["id"] + "|" + it["symbol"]] = now.isoformat()[:10]
+                if r.get("status") == "ok":
+                    log(tr, now, f"Odkryto regułę dla {it['name']}: {r['text']} → cena {'rośnie' if r['dir'] == 'up' else 'spada'} "
+                                 f"{r['target']} (test na nowych danych: {r['test'][1]}%).", "new")
+        for t in S_.get("now", []):
+            day = it["date"] if t["type"] in ("intra", "rest") else it["date"]
+            rid = t["id"] + "|" + it["symbol"]
+            if (rid, day) in seen or not it.get("price"):
+                continue
+            seen.add((rid, day))
+            R.append({"rid": rid, "s": it["symbol"], "name": it["name"], "type": t["type"], "dir": t["dir"], "text": t["text"],
+                      "day": day, "px": t["entry"], "t": now.isoformat()})
+    tr["rules_log"] = [x for x in R if x.get("res") is None or x["t"] > (now - dt.timedelta(days=60)).isoformat()][-3000:]
+
+    # 6. porządki: trzymamy ostatnie wpisy (liczniki w stats zostają)
     cut = (now - dt.timedelta(days=45)).isoformat()
     tr["preds"] = [p for p in tr["preds"] if p.get("res") is None or p["t"] > cut][-6000:]
     tr["sims"] = [x for x in tr["sims"] if x.get("end") is None or x["t"] > cut][-300:]
@@ -176,7 +255,31 @@ def summary(tr, names):
         eq += x["R"]; curve.append({"t": x["end"], "eq": round(eq, 2)})
     pending = sum(p.get("res") is None for p in tr["preds"])
     recent = sorted([p for p in tr["preds"] if p.get("res") is not None], key=lambda p: p["due"])[-30:][::-1]
-    return {"preds": preds, "bins": bins, "pending": pending,
+    daily = tr["stats"].get("daily", {})
+    def agg(days):
+        out = {}
+        for d in days:
+            for k, (n, h) in daily.get(d, {}).items():
+                a = out.setdefault(k, [0, 0]); a[0] += n; a[1] += h
+        return {k: {"n": n, "hit": round(100 * h / n, 1)} for k, (n, h) in out.items() if n}
+    ds = sorted(daily)
+    by_day = [{"d": d, **agg([d])} for d in ds[-14:]][::-1]
+    weeks, months = {}, {}
+    for d in ds:
+        y, w, _ = dt.date.fromisoformat(d).isocalendar()
+        weeks.setdefault(f"{y}-T{w:02d}", []).append(d); months.setdefault(d[:7], []).append(d)
+    by_week = [{"d": k, **agg(v)} for k, v in sorted(weeks.items())[-8:]][::-1]
+    by_month = [{"d": k, **agg(v)} for k, v in sorted(months.items())[-6:]][::-1]
+    rl = []
+    for rid, (n, h) in tr["stats"].get("rules", {}).items():
+        st_, _, _ = rule_status(tr, rid)
+        rl.append({"rid": rid, "n": n, "hit": round(100 * h / n, 1), "status": st_})
+    rl.sort(key=lambda x: (x["n"] < 5, -x["hit"]))
+    open_rules = [x for x in tr.get("rules_log", []) if x.get("res") is None][-30:]
+    done_rules = [x for x in tr.get("rules_log", []) if x.get("res") in ("trafiona", "chybiona")][-30:][::-1]
+    return {"by_day": by_day, "by_week": by_week, "by_month": by_month, "rules_live": rl[:60],
+            "rules_open": open_rules, "rules_done": done_rules, "log": tr.get("log", [])[-60:][::-1],
+            "preds": preds, "bins": bins, "pending": pending,
             "sim": st("sim"), "sims_open": [x for x in sims if not x.get("end")][-20:],
             "sims_closed": closed[-30:][::-1], "curve": curve[-200:],
             "picks": {h: st("pick_" + h) for h in PICK_HZ},

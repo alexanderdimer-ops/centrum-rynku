@@ -173,3 +173,8 @@ footer{color:var(--dim);font-size:12.5px;padding:8px 16px 30px;max-width:1100px;
 .tile small{margin-top:2px}
 .kv.ex{grid-template-columns:minmax(120px,190px) 1fr}.kv.ex dd{text-align:left;font-weight:400;font-size:13.5px}.kv.ex dt{font-size:13.5px}
 @media (max-width:520px){.kv.ex{grid-template-columns:1fr}.kv.ex dt{font-weight:600;color:var(--ink);margin-top:6px}}
+
+/* werdykt końcowy */
+.final{border:1px solid var(--line)}
+.fr li{display:flex;gap:8px;margin:4px 0;font-size:14.5px}.fr li>span{font-weight:700;flex:none;width:14px}
+.fline{margin-top:14px;border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}

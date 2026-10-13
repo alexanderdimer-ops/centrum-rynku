@@ -9,9 +9,63 @@ Opcjonalnie wysyła powiadomienia na telefon przez ntfy.sh (sekret NTFY_TOPIC w 
 import json, math, os, re, sys, time, hashlib, statistics as st, urllib.request, urllib.parse, datetime as dt
 import email.utils
 import xml.etree.ElementTree as ET
-import track, ml, extras
+import track, ml, extras, strategies
 
 MODEL = {}  # wytrenowane modele uczenia maszynowego (ustawiane w głównym przebiegu)
+TRACK = {"stats": {}}  # stan samotestowania (do oceny reguł na żywo)
+FG = {}  # indeks strachu i chciwości (krypto)
+
+
+def final_verdict(it, ex, rules_now, my_events):
+    """Jeden prosty werdykt z wszystkich analiz: technika, potencjał, newsy, analitycy, COT, reguły, model, ryzyko."""
+    parts = []
+    def add(v, txt):
+        if abs(v) >= 0.15: parts.append((v, txt))
+    d = it["decision"]; P = it["potential"]
+    add({"go": 2, "wait": 0, "no": -2}[d["key"]], {"go": "Warunki techniczne sprzyjają wzrostom (" + d["reasons"][0].rstrip(".").lower() + ").",
+        "wait": "", "no": "Na wykresie przeważają sygnały spadkowe."}[d["key"]])
+    add((P["score"] - 50) / 25, f"Potencjał na tydzień: {P['score']}/100.")
+    if P["short"]["score"] is not None: add((P["short"]["score"] - 50) / 40, f"Potencjał na najbliższą sesję: {P['short']['score']}/100.")
+    if P["long"]["score"] is not None: add((P["long"]["score"] - 50) / 40, f"Potencjał długoterminowy: {P['long']['score']}/100.")
+    W = it["news"]["week"]
+    if W["count"]:
+        add(W["tone"] * 2.5, f"Wiadomości z tygodnia są {'pozytywne' if W['tone'] > 0 else 'negatywne'} ({W['pos']} dobrych, {W['neg']} złych, "
+                             f"{W['good']} z najbardziej wiarygodnych źródeł).")
+    if "analysts" in ex:
+        A = ex["analysts"]
+        add(1.0 if A["upside"] > 0.15 and A["buy_share"] > 0.6 else -1.0 if A["upside"] < -0.03 else 0,
+            f"Analitycy: cena docelowa {A['upside'] * 100:+.0f}% od obecnej.")
+    if "cot" in ex: add(ex["cot"]["dir"] * 0.7, "Duzi gracze (COT): " + ex["cot"]["text"][0].lower() + ex["cot"]["text"][1:])
+    if "sector" in ex: add((0.4 if ex["sector"]["etf_up"] else -0.4) + (0.3 if ex["sector"]["rel_3m"] > 0.03 else -0.3 if ex["sector"]["rel_3m"] < -0.03 else 0),
+                           ex["sector"]["text"])
+    rv = 0.0; rtxt = []
+    for r in rules_now:
+        st_, n_, h_ = track.rule_status(TRACK, r["id"] + "|" + it["symbol"])
+        if st_ == "rejected": continue
+        w_ = 2.0 if st_ == "confirmed" else 1.0
+        rv += (1 if r["dir"] == "up" else -1) * max(0, (r["acc"] or 50) - 50) / 10 * w_
+        rtxt.append(f"Strategia odkryta przez stronę: {r['text']} → {'wzrost' if r['dir'] == 'up' else 'spadek'} {r['when']} "
+                    f"(trafność {r['acc']:.0f}%{', potwierdzona na żywo' if st_ == 'confirmed' else ''}).")
+    if rtxt: add(max(-1.5, min(1.5, rv)), rtxt[0])
+    m = it.get("ml")
+    if m and m.get("w_1w"): add((m["1w"] - 50) / 10 * m["w_1w"], f"Model uczenia maszynowego: szansa wzrostu w tydzień {m['1w']:.0f}%.")
+    if it["group"] == "Krypto" and FG.get("value") is not None:
+        v = FG["value"]
+        add(0.6 if v < 20 else -0.6 if v > 80 else 0, f"Nastroje na rynku krypto: {FG['label']} ({v}/100) – skrajności często się odwracają.")
+    if it["risk"]["level"] >= 4: add(-1.0, "Bardzo wysokie ryzyko (duże wahania ceny).")
+    S_ = sum(v for v, _ in parts)
+    earn = next((e for e in my_events if e["kind"] == "wyniki" and 0 <= e["days"] <= 2), None)
+    if earn:
+        S_ = max(-1.4, min(1.4, S_))
+        parts.append((-0.01, f"{earn['title']} {('dziś' if earn['days'] == 0 else 'jutro' if earn['days'] == 1 else 'za 2 dni')} – przed wynikami lepiej nie otwierać pozycji."))
+    lv = ("strong_buy", "Bardzo warto wejść") if S_ >= 3.5 else ("buy", "Warto rozważyć wejście") if S_ >= 1.5 else         ("wait", "Poczekaj – brak wyraźnej przewagi") if S_ > -1.5 else ("avoid", "Nie inwestuj teraz") if S_ > -3.5 else         ("strong_avoid", "Zdecydowanie nie inwestuj")
+    sgn_ = 1 if S_ > 0 else -1
+    nz = [v for v, _ in parts if abs(v) >= 0.15]
+    agree = sum(1 for v in nz if v * sgn_ > 0) / len(nz) if nz else 0
+    conf = "wysoka" if agree >= 0.8 and abs(S_) >= 2.5 else "średnia" if agree >= 0.6 and abs(S_) >= 1 else "niska"
+    reasons = [{"t": t, "dir": "up" if v > 0 else "down"} for v, t in sorted(parts, key=lambda x: -abs(x[0])) if t][:6]
+    return {"key": lv[0], "title": lv[1], "score": round(S_, 2), "confidence": conf, "reasons": reasons,
+            "change": it["plan"]["warn"] if S_ > 0 or not it["plan"]["steps"] else it["plan"]["steps"][0]}
 
 
 def ml_predict(H, rc):
@@ -468,8 +522,12 @@ def nasdaq_earnings(ins):
     when = {"after market close": "po zamknięciu sesji w USA", "before market open": "przed otwarciem sesji w USA"}
     desc = when.get(m.group(4) or "", "godzina nieznana")
     eps = re.search(r"consensus EPS forecast for the quarter is \$(\d+(?:\.\d+)?)", txt)
+    last = re.search(r"same quarter last year was \$(-?\d+(?:\.\d+)?)", txt)
     if eps:
         desc += f"; prognoza analityków: {eps.group(1).replace('.', ',')} $ zysku na akcję"
+        if last and float(last.group(1)) > 0:
+            g = float(eps.group(1)) / float(last.group(1)) - 1
+            desc += f" (rok temu {last.group(1).replace('.', ',')} $ → oczekiwany {'wzrost' if g >= 0 else 'spadek'} zysku o {abs(g) * 100:.0f}%)"
     if "expected*" in txt:
         desc += " (data szacowana)"
     return [{"date": day.isoformat(), "time": False, "kind": "wyniki", "impact": "high",
@@ -866,6 +924,10 @@ NEWS_RULES = [  # (wzorzec, dla jakich rynków, kierunek, wyjaśnienie)
      "Spółka podniosła prognozy – rynek zwykle nagradza lepsze perspektywy."),
     (r"(cuts?|lowers?) (guidance|outlook|forecast)|obniża prognoz|profit warning", "stocks", "down",
      "Spółka obniżyła prognozy – to zwykle mocno ciąży cenie."),
+    (r"(expected|set|poised|on track) to (report|post|deliver) (strong|record|higher|solid)|strong (earnings|results|quarter) expected|"
+     r"record (quarter|earnings|revenue)|mają być (dobre|rekordowe|mocne)|rekordow\w* wynik", "stocks", "up",
+     "Rynek spodziewa się dobrych wyników. Przed publikacją cena często rośnie, ale po samych wynikach bywa różnie – "
+     "jeśli wyniki nie przebiją oczekiwań, cena potrafi spaść („kupuj plotki, sprzedawaj fakty”)."),
     (r"buyback|skup\w* akcji", "stocks", "up", "Skup akcji własnych zmniejsza liczbę akcji na rynku i wspiera cenę."),
     (r"lawsuit|probe|investigation|antitrust|pozew|śledztw|\bkar[aęy]\b|fined?\b", "stocks crypto", "down",
      "Problemy prawne zwiększają niepewność i zwykle ciążą cenie."),
@@ -1484,6 +1546,13 @@ def detect_changes(items, prev):
 
 # ---------- analiza jednego instrumentu ----------
 def analyze(ins, bankier, cal, vix):
+    it = _analyze(ins, bankier, cal, vix)
+    my = [e for e in cal if ins["symbol"] in e["symbols"]]
+    it["final"] = final_verdict(it, it.get("extras") or {}, (it.get("strategies") or {}).get("now", []), my)
+    return it
+
+
+def _analyze(ins, bankier, cal, vix):
     H = history(ins["symbol"])
     S = {"d": H["d"], "c": H["c"], "h": H["h"], "l": H["l"], "r": rets(H["c"]), "rc": None, "rr": None}
     c, n, days, crypto = H["c"], len(H["c"]), H["d"], ins["group"] == "Krypto"
@@ -1656,6 +1725,20 @@ def analyze(ins, bankier, cal, vix):
         round(max(-0.5, min(0.5, ex["analysts"]["upside"])), 3) if "analysts" in ex else 0.0,
         (ex["cot"]["index"] / 100 - 0.5) if "cot" in ex else 0.0,
         {"good": 1.0, "mid": 0.0, "bad": -1.0}[vkey]]
+    strat = None
+    try:
+        hd = strategies.hourly_days(get_json, chart_url, ins["symbol"]) \
+            if ins["group"] in ("Akcje GPW", "Akcje USA", "Indeksy", "Akcje – świat") else None
+        res_ = strategies.discover(H, S["rc"], hd)
+        session_live = bool(live and not crypto and days[-1] == NOW.date())
+        fh = None
+        if session_live and intra and intra.get("cnd") and len(intra["cnd"]["c"]) >= 4:
+            fh = (intra["cnd"]["o"][0], intra["cnd"]["c"][3])
+        usable = [r for r in res_["rules"] if r["status"] != "fail"]
+        strat = {"rules": res_["rules"], "weekday": res_["weekday"], "tested": res_["tested"],
+                 "now": strategies.triggered(usable, H, S["rc"], fh, session_live)}
+    except Exception as e:
+        print("Strategie pominięte:", ins["symbol"], e)
     for key, h in (("overall", "1d"), ("p_week", "1w")):
         lm = MODEL.get("live_" + h)
         if lm and ml.blend_weight(lm.get("test")) > 0:
@@ -1677,7 +1760,7 @@ def analyze(ins, bankier, cal, vix):
             "summary": describe(ins, lv, pf, rs, ref_info, week, bt, risk, setups)
                        + [v["text"] for k, v in ex.items() if v.get("text") and k != "season"]
                        + ([ex["season"]["text"]] if ex.get("season", {}).get("text") else []),
-            "extras": ex, "ml": mlp, "live_x": live_x,
+            "extras": ex, "ml": mlp, "live_x": live_x, "strategies": strat,
             "plan": plan, "levels": lv, "rsi": rs, "perf": pf,
             "today_vs_typical": abs(change) / lv["sd60"] if lv["sd60"] else None,
             "forecast": {"ranges": ranges, "analogs": an, "analog_state": an_desc},
@@ -1748,6 +1831,13 @@ if __name__ == "__main__":
         except Exception as e:
             print("RSS pominięty:", f, e)
     cal = calendar(instruments, (prev or {}).get("calendar", []))
+    TRACK.update(track.load())
+    try:
+        fg = get_json("https://api.alternative.me/fng/?limit=1", ttl=3600)["data"][0]
+        FG.update(value=int(fg["value"]), label={"Extreme Fear": "skrajny strach", "Fear": "strach", "Neutral": "neutralnie",
+                                                 "Greed": "chciwość", "Extreme Greed": "skrajna chciwość"}.get(fg["value_classification"], fg["value_classification"]))
+    except Exception as e:
+        print("Indeks strachu krypto pominięty:", e)
     try:
         old_model = json.load(open("model.json", encoding="utf-8"))
     except Exception:
@@ -1813,8 +1903,17 @@ if __name__ == "__main__":
     changes, new_changes = detect_changes(items, prev)
     world = world_news((prev or {}).get("world"), instruments)
     notify(items, new_changes)
+    allr = [dict(r, sym=it["symbol"], name=it["name"]) for it in items for r in (it.get("strategies") or {}).get("rules", [])]
+    strat_sum = {"tested": sum((it.get("strategies") or {}).get("tested", 0) for it in items), "found": len(allr),
+                 "ok": sum(r["status"] == "ok" for r in allr), "fail": sum(r["status"] == "fail" for r in allr),
+                 "best": sorted([r for r in allr if r["status"] == "ok"], key=lambda r: -(r["test"][1] or 0))[:12]}
     names = {i["symbol"]: i["name"] for i in items} | {x["symbol"]: x["name"] for x in sc["items"]}
     tr = track.update(tr, NOW, items, sc["items"], {h: picks[h] for h in ("short", "mid", "long")})
+    for h in ("1d", "1w", "1m"):
+        if old_model.get(h) and old_model.get("date") == today and not any(today in x["t"] and "Model uczenia" in x["text"] for x in tr.get("log", [])):
+            t_ = old_model[h]["test"]
+            track.log(tr, NOW, f"Model uczenia maszynowego ({h}) wytrenowany od nowa: trafność w teście {t_['acc']}% "
+                               f"(zawsze „wzrost”: {t_['majority']}%).", "ml")
     track.save(tr)
     hs = [it["sim_hist"] for it in items if it.get("sim_hist") and it["sim_hist"]["signal"]]
     def agg(key):
@@ -1824,7 +1923,8 @@ if __name__ == "__main__":
                                      "avgR": sum(r["avgR"] * r["n"] for r in rows) / n_}
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items,
-                   "changes": changes, "scan": sc, "world": world, "picks": picks,
+                   "changes": changes, "scan": sc, "world": world, "picks": picks, "strat": strat_sum,
+                   "fg_crypto": FG or None,
                    "track": track.summary(tr, names),
                    "ml": {"date": old_model.get("date"), "live": old_model.get("live", {}).get("summary"),
                           **{h: {"test": old_model[h]["test"], "weight": ml.blend_weight(old_model[h]["test"]),

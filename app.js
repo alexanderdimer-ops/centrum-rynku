@@ -69,7 +69,7 @@ function card(it){const st=status(KIND[it.group]);
  <header><div><h2>${esc(it.name)}</h2><span class="sub">${esc(it.symbol)} · ${st.open?"otwarty":"zamknięty"}${it.stale?' · <span class="midc">dane z poprzedniej aktualizacji</span>':""}</span></div>
  <div class="px">${fmt(it.price)} ${esc(it.currency)}<span class="chg ${sgn(it.change)}">${pct(it.change,2)}</span></div>${heart(it)}</header>
  ${spark(it)}
- <div class="cfoot"><span class="dec ${DEC[it.decision.key]} bg-${it.decision.key}">${esc(it.decision.title)}</span>${riskChip(it.risk)}${nextEventChip(it.symbol)}</div></article>`}
+ <div class="cfoot"><span class="dec c-${FK[(it.final||{}).key]||it.decision.key} bg-${FK[(it.final||{}).key]||it.decision.key}">${esc((it.final||it.decision).title)}</span>${riskChip(it.risk)}${nextEventChip(it.symbol)}</div></article>`}
 function viewRynki(){
  const k=["gpw","us","fut","crypto"].map(k=>{const s=status(k);return `<span class="chip dot ${s.open?"up":"flat"}" title="${esc(s.text)}">${SESS[k].name}: ${s.open?"otwarte":"zamknięte"}</span>`}).join("");
  $("app").innerHTML=`<div class="upd">${updTxt()}</div>
@@ -98,12 +98,13 @@ function viewDetail(sym,tab){const it=item(sym);if(!it){location.hash="#rynki";r
  <div class="tabs" role="tablist">${DTABS.map(([k,l])=>`<button role="tab" data-tab="${k}" aria-selected="${k===tab}">${l}</button>`).join("")}</div>
  <div id="tab"></div>`;
  ({decyzja:tDecyzja,wykres:tWykres,kalkulator:tKalk,prognoza:tPrognoza,newsy:tNewsy})[tab](it);
+ if(tab!=="decyzja")$("tab").insertAdjacentHTML("beforeend",finalLine(it));
  if(tab==="wykres")drawChart(it)}
 
 function tDecyzja(it){const d=it.decision,pl=it.plan,r=it.risk;
  const ev=eventsFor(it.symbol).filter(e=>e.days<=7&&e.impact!=="low");
  const extra=r.why.slice(1);
- $("tab").innerHTML=`<div class="hero bg-${d.key}"><h3 class="${DEC[d.key]}">${esc(d.title)}</h3><ul>${d.reasons.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>
+ $("tab").innerHTML=`${finalBox(it)}<p class="small mut" style="margin:14px 0 6px">Ocena techniczna (wykres):</p><div class="hero bg-${d.key}"><h3 class="${DEC[d.key]}" style="font-size:18px">${esc(d.title)}</h3><ul>${d.reasons.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>
  <div class="stats4">
   <div class="stat"><b>Szansa wzrostu w ciągu ~4 godzin</b><strong class="${p50(it.hours&&it.hours.p)}">${it.hours?fmt(it.hours.p,0)+"%":"–"}</strong></div>
   <div class="stat"><b>Szansa wzrostu jutro</b><strong class="${p50(it.overall)}">${fmt(it.overall,0)}%</strong></div>
@@ -364,7 +365,7 @@ function tPrognoza(it){const F=it.forecast,bt=it.bt,S=it.setups;
   <table class="fc"><thead><tr><th>Kiedy</th><th>Od</th><th>Do</th><th>Ruch</th></tr></thead><tbody>${rng}</tbody></table></section>
  <section class="box"><h3>Co działo się w podobnych sytuacjach</h3>${an?`<p style="margin:0 0 6px" class="small">Sytuacja jak teraz (5 lat historii): <i>${esc(F.analog_state)}</i></p><ul class="sum">${an}</ul>`:`<p class="note">Za mało podobnych sytuacji w historii.</p>`}
   ${su?`<p style="margin:12px 0 6px" class="small">Czy warunki wzrostu z zakładki „Decyzja” działały na tym instrumencie:</p><ul class="sum">${su}</ul>`:""}</section></div>
- ${mlBox(it)}${extrasBox(it)}
+ ${stratBox(it)}${mlBox(it)}${extrasBox(it)}
  <section class="box"><h3>Skąd ten wynik – ${it.methods.length} niezależnych metod</h3>${meth}
   <p class="note" style="margin:10px 0 0">Surowa średnia metod: ${fmt(it.raw,0)}%. Test na historii (${bt.days} sesji): pasek trafiał kierunek w ${bt.overall==null?"–":fmt(bt.overall,0)+"%"} przypadków, a wzrostowych sesji było ${fmt(bt.up_share,0)}%. Dlatego szansa jest skalibrowana: siła sygnału ×${fmt(bt.k,2)} wokół naturalnej częstości wzrostów ${fmt(bt.base,0)}%. Wagi metod liczone są tylko z wcześniejszych danych.</p></section>
  <p class="note">To spekulacja oparta na historii, nie pewnik. Nagłe wydarzenia (wyniki spółki, decyzje banków centralnych, wojny) mogą wszystko zmienić.</p>`}
@@ -530,7 +531,7 @@ function oppCard(x){const st=x.score>=80?"go":x.score>=70?"wait":"no";
  return `<article class="box opp"><header class="row" style="justify-content:space-between;align-items:flex-start"><div><h3 style="margin:0">${esc(x.name)}</h3><span class="sub">${esc(x.symbol)} · ${esc(x.group)} · ${x.own?"z Twojej listy":"spoza listy"}</span></div>
  <div class="px">${fmt(x.price)} ${esc(x.currency)}<span class="chg ${sgn(x.change)}">${pct(x.change,2)}</span></div></header>
  ${sp}<div class="row" style="gap:10px"><div style="flex:1">${bar(x.score,`var(--${st==="go"?"up":st==="wait"?"mid":"down"})`)}</div><b class="c-${st}">Potencjał ${x.score}/100</b></div>
- <div class="cfoot" style="margin-top:8px"><span class="chip dot r${x.risk}">Ryzyko: ${esc(x.risk_label.toLowerCase())}</span>${x.earnings_days!=null&&x.earnings_days>=0&&x.earnings_days<=14?`<span class="chip" style="color:var(--info)">Wyniki ${whenTxt(x.earnings_days)}</span>`:""}</div>
+ <div class="cfoot" style="margin-top:8px">${x.own&&item(x.symbol)&&item(x.symbol).final?`<span class="dec c-${FK[item(x.symbol).final.key]} bg-${FK[item(x.symbol).final.key]}">${esc(item(x.symbol).final.title)}</span>`:""}<span class="chip dot r${x.risk}">Ryzyko: ${esc(x.risk_label.toLowerCase())}</span>${x.earnings_days!=null&&x.earnings_days>=0&&x.earnings_days<=14?`<span class="chip" style="color:var(--info)">Wyniki ${whenTxt(x.earnings_days)}</span>`:""}</div>
  <p class="small" style="margin:10px 0 4px"><b>Dlaczego teraz:</b></p><ul class="sum small">${x.plus.slice(0,4).map(t=>`<li>${esc(t)}</li>`).join("")}</ul>
  ${x.minus.length?`<p class="small" style="margin:8px 0 4px"><b>Na co uważać:</b></p><ul class="sum small">${x.minus.slice(0,3).map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
  ${(x.news||[]).length?`<ul class="clean nlist small" style="margin-top:6px">${x.news.slice(0,2).map(newsLi).join("")}</ul>`:""}
@@ -625,6 +626,7 @@ function viewWyniki(){resolveTests();const T=D.track||{},HT=D.hist_test||{},P=T.
  const hs=HT.signal,he=HT.every;
  $("app").innerHTML=`<div class="upd">${updTxt()}</div><h2 style="margin:4px 0 6px">Wyniki – czy strona ma rację?</h2>
  <p class="note" style="margin:0 0 12px">Strona sama, bez Twojego udziału, zapisuje swoje przewidywania dla wszystkich instrumentów i po czasie sprawdza, czy się sprawdziły. Otwiera też wirtualne transakcje, gdy mówi „Możesz rozważyć wejście”. Na tej podstawie sama się poprawia: koryguje szanse i zaostrza wymagania, gdy jej propozycje wychodzą słabo.</p>
+ ${learnBox()}
  <section class="box"><h3>Trafność przewidywań kierunku (na żywo)</h3><div class="tiles">${tile("Za 4 godziny",P["4h"],"pierwsze po 4 godz.")}${tile("Za 1 dzień",P["1d"],"pierwsze jutro")}${tile("Za tydzień",P["1w"],"pierwsze za tydzień")}${tile("Za miesiąc",P["1m"],"pierwsze za miesiąc")}</div>
   <p class="note">Trafność = jak często strona dobrze wskazała kierunek (wzrost/spadek). 50% to rzut monetą. Czeka na sprawdzenie: ${T.pending||0} przewidywań.</p>
   ${bins?`<details><summary class="small">Kalibracja – czy „szansa 60%” naprawdę oznacza 60%?</summary><table class="fc"><thead><tr><th>Horyzont</th><th>&lt;45%</th><th>45–50%</th><th>50–55%</th><th>55–60%</th><th>60%+</th></tr></thead><tbody>${bins}</tbody></table><p class="note">W komórkach: jak często cena naprawdę rosła przy takiej podanej szansie (w nawiasie liczba przypadków). Gdy uzbiera się ≥30 przypadków, strona sama koryguje podawane szanse.</p></details>`:""}</section>
@@ -704,6 +706,55 @@ function mlWyniki(){const M=D.ml;if(!M)return "";const H={"1d":"Jutro","1w":"Za 
  ${M["1w"]&&M["1w"].lessons.length?`<p class="small" style="margin:10px 0 4px"><b>Czego model się nauczył z historii:</b></p><ul class="sum small">${M["1w"].lessons.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}
  <p class="note">Wniosek na dziś: z samego wykresu model nie znajduje trwałej przewagi – to normalne na płynnych rynkach, dlatego strona go nie słucha, dopóki nie zacznie wygrywać. ${L?`Drugi model uczy się na własnych, sprawdzonych przewidywaniach strony (z newsami, analitykami, COT i oceną potencjału): zebrano ${L.n} z ${L.need} potrzebnych przypadków${L.test?`, trafność w teście ${fmt(L.test.acc,1)}%`:""}.`:""}</p></section>`}
 
+
+// ---------- WERDYKT KOŃCOWY (suma wszystkich analiz) ----------
+const FK={strong_buy:"go",buy:"go",wait:"wait",avoid:"no",strong_avoid:"no"};
+function finalBox(it){const F=it.final;if(!F)return "";const k=FK[F.key];
+ return `<section class="hero bg-${k} final"><p class="small mut" style="margin:0 0 2px">Werdykt końcowy – suma wszystkich analiz</p>
+ <h3 class="c-${k}" style="font-size:24px">${esc(F.title)}</h3>
+ <ul class="clean fr">${F.reasons.map(r=>`<li><span class="${r.dir==="up"?"up":"down"}">${r.dir==="up"?"＋":"－"}</span>${esc(r.t)}</li>`).join("")}</ul>
+ <p class="small" style="margin:8px 0 0"><b>Pewność:</b> ${esc(F.confidence)} · <b>Co zmieniłoby ocenę:</b> ${esc(F.change)}</p></section>`}
+function finalLine(it){const F=it.final;if(!F)return "";const k=FK[F.key];
+ return `<div class="fline bg-${k}"><span class="mut small">Podsumowanie:</span> <b class="c-${k}">${esc(F.title)}</b> <span class="small mut">(pewność: ${esc(F.confidence)})</span> <button class="linkbtn small" data-tab="decyzja">dlaczego?</button></div>`}
+
+// ---------- STRATEGIE ODKRYTE PRZEZ STRONĘ ----------
+const STS={ok:["potwierdzona w teście","up"],weak:["słaba w teście","midc"],fail:["odrzucona w teście","down"]};
+function stratBox(it){const S=it.strategies;if(!S)return "";const live=(D.track||{}).rules_live||[];
+ const lv=id=>live.find(x=>x.rid===id+"|"+it.symbol);
+ const wt=(S.weekday||{}).intra||{},wn=(S.weekday||{}).next||{},WDN=["Pon","Wt","Śr","Czw","Pt","Sob","Nd"];
+ const days=[0,1,2,3,4,5,6].filter(w=>wt[w]||wn[w]);
+ return `<section class="box"><h3>Strategie odkryte przez stronę</h3>
+ <p class="small" style="margin-top:-4px">Strona sama sprawdziła ${S.tested} hipotez dla ${esc(it.name)} (dni tygodnia, serie wzrostów i spadków, luki na otwarciu, pierwsza godzina handlu, RSI, średnie, początek/koniec miesiąca, zachowanie szerokiego rynku). Każdą sprawdza na trzech okresach: odkrycie → potwierdzenie → test na najnowszych danych, których nie używała. Potem śledzi je na żywo.</p>
+ ${S.now.length?`<div class="alert blue"><b>Działa teraz:</b><ul>${S.now.map(r=>`<li>${esc(r.text)} → cena ${r.dir==="up"?"<b class=\"up\">rośnie</b>":"<b class=\"down\">spada</b>"} ${esc(r.when)} (trafność ${fmt(r.acc,0)}% z ${r.n} przypadków)</li>`).join("")}</ul></div>`:""}
+ ${S.rules.length?`<ul class="clean nlist">${S.rules.slice(0,10).map(r=>{const L=lv(r.id),st=STS[r.status];return `<li><span class="dotc" style="background:var(--${r.dir==="up"?"up":"down"})"></span><span><b>${esc(r.text[0].toUpperCase()+r.text.slice(1))}</b> → cena ${r.dir==="up"?"rośnie":"spada"} ${esc(r.target)}
+  <span class="nmeta">odkrycie ${fmt(r.disc[1],0)}% (${r.disc[0]}) · potwierdzenie ${fmt(r.val[1],0)}% (${r.val[0]}) · test ${r.test[1]==null?"–":fmt(r.test[1],0)+"%"} (${r.test[0]}) · zwykle ${fmt(r.base,0)}% · <b class="${st[1]}">${st[0]}</b>${L?` · na żywo <b class="${L.hit>=65?"up":L.hit<50?"down":"flat"}">${fmt(L.hit,0)}%</b> (${L.n})`:""}</span></span></li>`}).join("")}</ul>`:`<p class="note">Żadna hipoteza nie przeszła ostrych testów – na tym instrumencie nie widać powtarzalnych prostych wzorców.</p>`}
+ ${days.length?`<details style="margin-top:8px"><summary class="small"><b>Sprawdź „mity” o dniach tygodnia</b></summary><table class="fc"><thead><tr><th>Dzień</th><th>Od otwarcia do zamknięcia</th><th>Na tej sesji (zamknięcie do zamknięcia)</th></tr></thead><tbody>
+ ${days.map(w=>`<tr><td>${WDN[w]}</td><td>${wt[w]?`wzrost w <b class="${wt[w].up>=55?"up":wt[w].up<45?"down":"flat"}">${fmt(wt[w].up,0)}%</b> <span class="dim">(${wt[w].n}; ostatnio ${fmt(wt[w].recent_up,0)}%)</span>`:"–"}</td><td>${wn[w]?`<b class="${wn[w].up>=55?"up":wn[w].up<45?"down":"flat"}">${fmt(wn[w].up,0)}%</b> <span class="dim">(${wn[w].n})</span>`:"–"}</td></tr>`).join("")}</tbody></table>
+ <p class="note">Np. teoria „w piątki od otwarcia rośnie” – tu widać, jak było naprawdę w ostatnich ~4 latach („ostatnio” = 50 ostatnich takich dni).</p></details>`:""}</section>`}
+
+// ---------- WYNIKI: postęp nauki, dzień / tydzień / miesiąc, dziennik ----------
+const KN={pred_4h:"4 godz.",pred_1d:"1 dzień",pred_1w:"tydzień",pred_1m:"miesiąc",rule:"strategie",sim:"transakcje",pick:"propozycje"};
+function periodTable(rows,lab){if(!rows||!rows.length)return `<p class="note">Pierwsze wyniki pojawią się, gdy strona rozliczy pierwsze przewidywania (po 4 godzinach / dniu).</p>`;
+ const keys=Object.keys(KN).filter(k=>rows.some(r=>r[k]));
+ return `<div style="overflow-x:auto"><table class="fc"><thead><tr><th>${lab}</th>${keys.map(k=>`<th>${KN[k]}</th>`).join("")}</tr></thead><tbody>
+ ${rows.map(r=>`<tr><td>${esc(r.d)}</td>${keys.map(k=>r[k]?`<td class="${r[k].hit>=65?"up":r[k].hit>=55?"":r[k].hit<50?"down":"flat"}">${fmt(r[k].hit,0)}% <span class="dim">(${r[k].n})</span></td>`:"<td>–</td>").join("")}</tr>`).join("")}</tbody></table></div>`}
+let perTab="day";
+function learnBox(){const T=D.track||{},SS=D.strat||{},RL=T.rules_live||[];
+ const best=[...RL].filter(r=>r.n>=5).sort((a,b)=>b.hit-a.hit)[0],conf=RL.filter(r=>r.status==="confirmed").length,rej=RL.filter(r=>r.status==="rejected").length;
+ const P=T.preds||{},bestH=Object.entries(P).filter(([,v])=>v&&v.n>=20).sort((a,b)=>b[1].hit-a[1].hit)[0];
+ return `<section class="box"><h3>Postęp nauki – cel: trafność co najmniej 65%</h3>
+ <div class="tiles"><div class="tile"><b>Sprawdzone hipotezy</b><span>${SS.tested||0}</span></div><div class="tile"><b>Odkryte reguły</b><span>${SS.found||0}</span></div>
+ <div class="tile"><b>Przeszły test</b><span class="up">${SS.ok||0}</span></div><div class="tile"><b>Potwierdzone na żywo (≥65%)</b><span class="${conf?"up":"flat"}">${conf}</span></div>
+ <div class="tile"><b>Odrzucone na żywo</b><span class="${rej?"down":"flat"}">${rej}</span></div><div class="tile"><b>Najlepsza na żywo</b><span class="${best&&best.hit>=65?"up":"flat"}">${best?fmt(best.hit,0)+"%":"–"}</span><small class="dim" style="display:block;font-size:11.5px">${best?best.n+" sprawdzeń":"czeka na dane"}</small></div></div>
+ <p class="note">Strona pracuje bez przerwy: co ~5 minut zapisuje przewidywania i sprawdza stare, codziennie od nowa szuka strategii i trenuje model. Reguła jest uznana za potwierdzoną, gdy na żywo trafi w co najmniej 65% z min. 15 przypadków; poniżej 50% – zostaje odrzucona. ${bestH?`Najlepszy horyzont przewidywań na żywo: ${KN["pred_"+bestH[0]]} – ${fmt(bestH[1].hit,0)}%.`:""} Osiągnięcie 65% nie jest gwarantowane – rynki są trudne do przewidzenia; strona pokaże uczciwie, czy i gdzie się udało.</p></section>
+ <section class="box"><h3>Wyniki własnych testów</h3>
+ <div class="seg" role="group" aria-label="Okres" style="margin-bottom:10px"><button data-per="day" aria-pressed="${perTab==="day"}">Dzień po dniu</button><button data-per="week" aria-pressed="${perTab==="week"}">Tydzień po tygodniu</button><button data-per="month" aria-pressed="${perTab==="month"}">Miesiąc po miesiącu</button></div>
+ ${periodTable({day:T.by_day,week:T.by_week,month:T.by_month}[perTab],{day:"Dzień",week:"Tydzień",month:"Miesiąc"}[perTab])}
+ <p class="note">W komórkach: trafność (w nawiasie liczba rozliczonych) według dnia rozliczenia. Kolumny: przewidywania kierunku na 4 godz. / dzień / tydzień / miesiąc, strategie odkryte przez stronę, wirtualne transakcje (zyskowne), propozycje z „Teraz warto” (zyskowne).</p></section>
+ ${(SS.best||[]).length?`<section class="box"><h3>Najlepsze strategie znalezione przez stronę</h3><ul class="clean nlist small">${SS.best.map(r=>{const L=RL.find(x=>x.rid===r.id+"|"+r.sym);return `<li><span class="dotc" style="background:var(--${r.dir==="up"?"up":"down"})"></span><span><a href="#i=${encodeURIComponent(r.sym)}/prognoza"><b>${esc(r.name)}</b></a>: ${esc(r.text)} → ${r.dir==="up"?"wzrost":"spadek"} ${esc(r.target)}<span class="nmeta">test na nowych danych ${fmt(r.test[1],0)}% (${r.test[0]}) · cała historia ${fmt(r.all[1],0)}% (${r.all[0]})${L?` · na żywo ${fmt(L.hit,0)}% (${L.n})`:" · na żywo: czeka"}</span></span></li>`}).join("")}</ul>
+ <p class="note">Uwaga: część reguł wypada świetnie w historii, ale słabiej na nowych danych – to normalne przy testowaniu wielu hipotez. Dlatego liczy się wynik „na żywo”.</p></section>`:""}
+ ${(T.log||[]).length?`<section class="box"><h3>Dziennik nauki</h3><ul class="clean nlist small">${T.log.slice(0,25).map(x=>`<li><span class="dotc" style="background:var(--${x.kind==="good"||x.kind==="new"?"up":x.kind==="bad"?"down":"info"})"></span><span>${esc(x.text)}<span class="nmeta">${ago(x.t)}</span></span></li>`).join("")}</ul></section>`:""}`}
+
 // ---------- nawigacja ----------
 function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1));
  let v="rynki";const m=h.match(/^i=([^/]+)(?:\/(\w+))?$/);
@@ -715,6 +766,7 @@ function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1))
 document.addEventListener("click",e=>{const t=e.target;
  const h=t.closest("[data-heart]");if(h){e.stopPropagation();const s=h.dataset.heart;fav=fav.includes(s)?fav.filter(x=>x!==s):[...fav,s];store.set("fav",fav);
   document.querySelectorAll(`[data-heart="${CSS.escape(s)}"]`).forEach(b=>{const f=fav.includes(s);b.setAttribute("aria-pressed",f);b.textContent=f?"♥":"♡"});if($("out"))renderList();updBadge();return}
+ const pe=t.closest("[data-per]");if(pe){perTab=pe.dataset.per;viewWyniki();return}
  const po=t.closest("[data-pot]");if(po){potH=po.dataset.pot;store.set("potH",potH);route();return}
  const te=t.closest("[data-test]");if(te){addTest(item(curSym()),te.dataset.test);return}
  const th=t.closest("[data-th]");if(th){terazH=th.dataset.th;store.set("terazH",terazH);viewTeraz();return}
