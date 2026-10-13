@@ -27,6 +27,11 @@ jobs:
           git show origin/dane:model.json > /tmp/m.json 2>/dev/null && mv /tmp/m.json model.json || true
           git show origin/dane:replay.json > /tmp/r.json 2>/dev/null && mv /tmp/r.json replay.json || true
           git show origin/dane:lab.json > /tmp/l.json 2>/dev/null && mv /tmp/l.json lab.json || true
+          # jeśli bieżących danych nie ma (np. przypadkowo usunięte), odtwórz stan nauki z kopii zapasowej
+          git fetch -q origin kopia || true
+          for f in track model replay lab; do
+            [ -s "$f.json" ] || { git show origin/kopia:stan/$f.json > /tmp/k.json 2>/dev/null && mv /tmp/k.json $f.json && echo "Odtworzono $f.json z kopii"; } || true
+          done
       - name: Aktualizuj w pętli
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
@@ -50,3 +55,17 @@ jobs:
             if [ $SECONDS -ge $end ] || [ "$dow" -ge 6 ] || [ "$h" -ge 22 ] || [ "$h" -lt 6 ]; then break; fi
             sleep 200
           done
+      - name: Codzienna kopia zapasowa stanu nauki (gałąź "kopia", z pełną historią)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          today=$(date -u +%F)
+          if [ "$(git show origin/kopia:DATA 2>/dev/null)" = "$today" ]; then echo "Dzisiejsza kopia już jest"; exit 0; fi
+          [ -s track.json ] || { echo "Brak danych do kopii"; exit 0; }
+          d=$(mktemp -d); ws=$(pwd)
+          cd "$d" && git init -q -b kopia
+          git fetch -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" kopia && git checkout -q FETCH_HEAD || true
+          mkdir -p stan && for f in track model replay lab data; do cp "$ws/$f.json" stan/ 2>/dev/null || true; done
+          cp "$ws/instruments.json" stan/ && echo "$today" > DATA
+          git add -A && git -c user.name=dane-bot -c user.email=bot@users.noreply.github.com commit -qm "Kopia stanu nauki $today"             && git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:kopia && echo "Zapisano kopię $today"
