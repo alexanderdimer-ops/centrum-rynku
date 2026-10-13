@@ -212,7 +212,7 @@ def blend_weight(test):
 
 
 LIVE_LABELS = [x[0] for x in LABELS] + ["Nastrój newsów (7 dni)", "Potencjał krótko", "Potencjał średnio",
-                                        "Potencjał długo", "Cena docelowa analityków", "Pozycje funduszy (COT)", "Ocena strony"]
+                                        "Potencjał długo", "Cena docelowa analityków", "Pozycje funduszy (COT)", "Ocena strony", "Strategie działające teraz"]
 
 
 def train_live(tr, old=None, min_n=300):

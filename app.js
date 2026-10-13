@@ -626,7 +626,7 @@ function viewWyniki(){resolveTests();const T=D.track||{},HT=D.hist_test||{},P=T.
  const hs=HT.signal,he=HT.every;
  $("app").innerHTML=`<div class="upd">${updTxt()}</div><h2 style="margin:4px 0 6px">Wyniki – czy strona ma rację?</h2>
  <p class="note" style="margin:0 0 12px">Strona sama, bez Twojego udziału, zapisuje swoje przewidywania dla wszystkich instrumentów i po czasie sprawdza, czy się sprawdziły. Otwiera też wirtualne transakcje, gdy mówi „Możesz rozważyć wejście”. Na tej podstawie sama się poprawia: koryguje szanse i zaostrza wymagania, gdy jej propozycje wychodzą słabo.</p>
- ${learnBox()}
+ ${learnBox()}${replayBox()}${portfolioBox()}
  <section class="box"><h3>Trafność przewidywań kierunku (na żywo)</h3><div class="tiles">${tile("Za 4 godziny",P["4h"],"pierwsze po 4 godz.")}${tile("Za 1 dzień",P["1d"],"pierwsze jutro")}${tile("Za tydzień",P["1w"],"pierwsze za tydzień")}${tile("Za miesiąc",P["1m"],"pierwsze za miesiąc")}</div>
   <p class="note">Trafność = jak często strona dobrze wskazała kierunek (wzrost/spadek). 50% to rzut monetą. Czeka na sprawdzenie: ${T.pending||0} przewidywań.</p>
   ${bins?`<details><summary class="small">Kalibracja – czy „szansa 60%” naprawdę oznacza 60%?</summary><table class="fc"><thead><tr><th>Horyzont</th><th>&lt;45%</th><th>45–50%</th><th>50–55%</th><th>55–60%</th><th>60%+</th></tr></thead><tbody>${bins}</tbody></table><p class="note">W komórkach: jak często cena naprawdę rosła przy takiej podanej szansie (w nawiasie liczba przypadków). Gdy uzbiera się ≥30 przypadków, strona sama koryguje podawane szanse.</p></details>`:""}</section>
@@ -692,6 +692,7 @@ function extrasBox(it){const X=it.extras||{};const rows=[];
  if(X.analysts){const A=X.analysts;rows.push(["Prognozy analityków (12 mies.)",`${esc(A.text)} Najniższa ${fmt(A.low)} USD, najwyższa ${fmt(A.high)} USD. <span class="dim">Źródło: Nasdaq.</span>`])}
  if(X.cot)rows.push(["Pozycje dużych graczy (COT)",`${esc(X.cot.text)} <span class="dim">Raport CFTC z ${esc(X.cot.date)}${X.cot.name.includes("WTI")?"; dla ropy Brent używamy raportu ropy WTI":""}.</span>`]);
  if(X.sector)rows.push(["Branża",esc(X.sector.text)]);
+ if(X.insiders)rows.push(["Transakcje zarządu",`${esc(X.insiders.text)} <span class="dim">Źródło: raporty SEC (OpenInsider).</span>`]);
  if(X.earn)rows.push(["Reakcje na poprzednie wyniki",`${esc(X.earn.text)}<br>${X.earn.items.map(e=>`${new Date(e.date).toLocaleDateString("pl-PL")}: <b class="${sgn(e.move)}">${pct(e.move*100)}</b>${e.surprise!=null?` (zysk ${e.surprise>=0?"lepszy":"gorszy"} od prognoz o ${fmt(Math.abs(e.surprise),1)}%)`:""}`).join(" · ")}`]);
  if(X.season&&X.season.text)rows.push(["Sezonowość miesięczna",`${esc(X.season.text)}${X.season.next?` W kolejnym miesiącu: wzrost w ${fmt(X.season.next.up*100,0)}% lat.`:""}`]);
  if(!rows.length)return "";
@@ -755,17 +756,66 @@ function learnBox(){const T=D.track||{},SS=D.strat||{},RL=T.rules_live||[];
  <p class="note">Uwaga: część reguł wypada świetnie w historii, ale słabiej na nowych danych – to normalne przy testowaniu wielu hipotez. Dlatego liczy się wynik „na żywo”.</p></section>`:""}
  ${(T.log||[]).length?`<section class="box"><h3>Dziennik nauki</h3><ul class="clean nlist small">${T.log.slice(0,25).map(x=>`<li><span class="dotc" style="background:var(--${x.kind==="good"||x.kind==="new"?"up":x.kind==="bad"?"down":"info"})"></span><span>${esc(x.text)}<span class="nmeta">${ago(x.t)}</span></span></li>`).join("")}</ul></section>`:""}`}
 
+
+// ---------- PORTFEL STRATEGII ----------
+function portfolioBox(){const P=(D.track||{}).portfolio;
+ return `<section class="box"><h3>Wirtualny portfel odkrytych strategii</h3>${P&&P.n?`<div class="tiles"><div class="tile"><b>Transakcji</b><span>${P.n}</span></div><div class="tile"><b>Wynik</b><span class="${sgn(P.pnl)}">${P.pnl>=0?"+":"−"}${pln(Math.abs(P.pnl))}</span></div><div class="tile"><b>Średnio na transakcję</b><span class="${sgn(P.pnl)}">${pln(P.pnl/P.n)}</span></div></div>`:`<p class="note">Strona wkłada „na niby” 1000 zł w każdą sytuację, w której zadziała jedna z odkrytych strategii, i wychodzi po czasie z reguły. Pierwsze wyniki pojawią się po rozliczeniu pierwszych wyzwoleń.</p>`}
+ <p class="note">Wynik bez kosztów transakcji (spread, prowizje), więc w praktyce byłby nieco niższy.</p></section>`}
+
+// ---------- GRA NA HISTORII (test kroczący) ----------
+function replayBox(){const R=D.replay;if(!R||!R.all)return "";const A=R.all,c=R.confident_1w,S=R.signals,C=R.combo;
+ const nm=s=>(item(s)||{name:s}).name;
+ return `<section class="box"><h3>Gra w przewidywanie na historii</h3>
+ <p class="small" style="margin-top:-4px">Strona cofnęła się w czasie (${esc(R.period[0])} – ${esc(R.period[1])}) i szła do przodu kwartał po kwartale: uczyła się tylko na przeszłości, zgadywała wzrost lub spadek, potem sprawdzała wynik i uczyła się dalej. Nigdy nie wracała do tych samych momentów – to uczciwy test, bez „ściągania”.</p>
+ <div class="tiles"><div class="tile"><b>Zgadywań</b><span>${A.n.toLocaleString("pl-PL")}</span></div>
+ <div class="tile"><b>Trafność – jutro</b><span class="${A.acc_1d>=55?"up":A.acc_1d<50?"down":"flat"}">${fmt(A.acc_1d,1)}%</span><small class="dim" style="display:block;font-size:11.5px">rzut monetą: 50%</small></div>
+ <div class="tile"><b>Trafność – tydzień</b><span class="${A.acc_1w>=55?"up":A.acc_1w<50?"down":"flat"}">${fmt(A.acc_1w,1)}%</span><small class="dim" style="display:block;font-size:11.5px">zawsze „wzrost”: ${fmt(A.up_1w,1)}%</small></div>
+ <div class="tile"><b>Najpewniejsze 10%</b><span class="${c.acc>=55?"up":"flat"}">${fmt(c.acc,1)}%</span><small class="dim" style="display:block;font-size:11.5px">${c.n.toLocaleString("pl-PL")} zgadywań</small></div></div>
+ <p class="small" style="margin:12px 0 4px"><b>Czy z czasem było lepiej?</b> (trafność na tydzień w kolejnych półroczach)</p>
+ <div class="tiles">${R.curve.map(x=>`<div class="tile"><b>${esc(x.period)}</b><span class="${x.acc_1w>=55?"up":x.acc_1w<50?"down":"flat"}">${fmt(x.acc_1w,0)}%</span></div>`).join("")}</div>
+ <p class="small" style="margin:12px 0 4px"><b>Twoje instrumenty</b> (trafność na tydzień; w nawiasie: jak często cena rosła):</p>
+ <div class="tiles">${Object.entries(R.per_sym||{}).sort((a,b)=>b[1].acc_1w-a[1].acc_1w).map(([s,v])=>`<div class="tile"><b>${esc(nm(s))}</b><span class="${v.acc_1w>=58?"up":v.acc_1w<50?"down":"flat"}">${fmt(v.acc_1w,0)}%</span><small class="dim" style="display:block;font-size:11.5px">(${fmt(v.up_1w,0)}%)</small></div>`).join("")}</div>
+ <p class="note">Sygnały z zakładki „Decyzja” (warunki wzrostu): trafność ${fmt(S.acc_1w,1)}% przy ${S.n.toLocaleString("pl-PL")} sygnałach, średnio ${pct(S.avg_1w,2)} w tydzień (wszystkie dni: ${pct(S.avg_all,2)}). Model + sygnały razem: ${C.acc_1w==null?"–":fmt(C.acc_1w,1)+"%"}. Wniosek: przewidywanie kierunku z samego wykresu daje najwyżej niewielką przewagę – najlepiej wypadają najpewniejsze sygnały i niektóre instrumenty. Test powtarza się co tydzień na nowych danych.</p>
+ <div class="row" style="margin-top:10px"><a class="btn pri" style="text-decoration:none" href="#gra">Zagraj ze stroną: zgadnij, co było dalej</a></div></section>`}
+
+let gameCur=null,gameAns=null,gameScore=store.get("gameScore",{you:0,site:0,n:0});
+function viewGra(){const G=((D.replay||{}).game||[]).filter(g=>item(g.s));if(!G.length){$("app").innerHTML=`<div class="msg" style="margin-top:20px">Gra będzie dostępna po pierwszym teście na historii.</div>`;return}
+ if(!gameCur){gameCur=G[Math.floor(Math.random()*G.length)];gameAns=null}
+ const g=gameCur,it=item(g.s),H=it.hist,day=Math.floor(new Date(g.d+"T12:00:00Z").getTime()/864e5)+719163-H.t0;
+ let k=H.dd.findIndex(x=>x>=day);if(k<0)k=H.dd.length-1;
+ const a=Math.max(0,k-90),b=gameAns?Math.min(H.dd.length-1,k+20):k,ys=H.c.slice(a,b+1),n=ys.length;
+ const w=Math.min(760,($("app").clientWidth||700)),h=240,pl=6,pr=58,pt=10,pb=22,iw=w-pl-pr,ih=h-pt-pb;
+ const mn=Math.min(...ys),mx=Math.max(...ys),pad=(mx-mn)*0.08||1,lo=mn-pad,hi=mx+pad,X=i=>pl+i/(Math.max(1,(gameAns?110:90)))*iw,Y=v=>pt+(1-(v-lo)/(hi-lo))*ih;
+ const path=(f,t)=>ys.slice(f,t+1).map((v,i)=>(i?"L":"M")+X(f+i).toFixed(1)+" "+Y(v).toFixed(1)).join("");
+ const kk=k-a,fut=gameAns?`<rect x="${X(kk)}" y="${pt}" width="${X(n-1)-X(kk)}" height="${ih}" fill="var(--info)" opacity=".07"/><path d="${path(kk,n-1)}" fill="none" stroke="${g.ret5>=0?"var(--up)":"var(--down)"}" stroke-width="2.5"/>`:"";
+ let grid="";for(let q=0;q<=3;q++){const v=lo+(hi-lo)/3*q;grid+=`<line x1="${pl}" x2="${pl+iw}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${pl+iw+6}" y="${Y(v)+4}" fill="var(--dim)" font-size="11">${fmt(v)}</text>`}
+ const svg=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="max-width:100%">${grid}<path d="${path(0,kk)}" fill="none" stroke="var(--ink)" stroke-width="2"/>${fut}<line x1="${X(kk)}" x2="${X(kk)}" y1="${pt}" y2="${pt+ih}" stroke="var(--mid)" stroke-dasharray="4 3"/><text x="${X(kk)-4}" y="${pt+12}" fill="var(--mid)" font-size="11" text-anchor="end">teraz</text></svg>`;
+ const site=g.p>50,sc=gameScore;
+ $("app").innerHTML=`<div class="upd"><a href="#wyniki">← Wyniki</a></div><h2 style="margin:4px 0 6px">Zgadnij, co było dalej</h2>
+ <p class="note" style="margin:0 0 12px">Prawdziwy moment z przeszłości: <b>${esc(it.name)}</b>, ${new Date(g.d).toLocaleDateString("pl-PL")}. Widzisz tylko 90 sesji przed tym dniem. Czy w ciągu tygodnia cena wzrosła, czy spadła? Strona zgadywała w tym samym momencie, znając tylko przeszłość.</p>
+ <section class="box">${svg}
+ ${gameAns==null?`<div class="row" style="margin-top:12px"><button class="btn pri" data-guess="up">Wzrośnie ↑</button><button class="btn" data-guess="down">Spadnie ↓</button></div>`:
+ `<div class="tiles" style="margin-top:12px"><div class="tile"><b>Naprawdę (tydzień)</b><span class="${sgn(g.ret5)}">${pct(g.ret5*100)}</span></div><div class="tile"><b>Twój typ</b><span class="${(gameAns==="up")===g.up?"up":"down"}">${gameAns==="up"?"wzrost":"spadek"} ${(gameAns==="up")===g.up?"✓":"✗"}</span></div>
+ <div class="tile"><b>Strona (szansa ${fmt(g.p,0)}%)</b><span class="${site===g.up?"up":"down"}">${site?"wzrost":"spadek"} ${site===g.up?"✓":"✗"}</span></div><div class="tile"><b>Po miesiącu</b><span class="${sgn(g.ret20)}">${pct(g.ret20*100)}</span></div></div>
+ <p class="small">${g.sig?"W tym momencie warunki wzrostu z zakładki „Decyzja” były spełnione. ":""}Niebieskie tło pokazuje, co było dalej (20 sesji).</p>
+ <div class="row"><button class="btn pri" data-gnext>Następny moment →</button></div>`}</section>
+ <section class="box"><h3>Wynik gry</h3><div class="tiles"><div class="tile"><b>Rund</b><span>${sc.n}</span></div><div class="tile"><b>Ty</b><span>${sc.n?fmt(sc.you/sc.n*100,0)+"%":"–"}</span></div><div class="tile"><b>Strona</b><span>${sc.n?fmt(sc.site/sc.n*100,0)+"%":"–"}</span></div></div>
+ <p class="note">To dobra lekcja: sprawdź, czy patrząc na wykres zgadujesz lepiej niż rzut monetą. Wynik jest zapisany tylko w tej przeglądarce. <button class="linkbtn" data-greset>Wyzeruj</button></p></section>`}
+
 // ---------- nawigacja ----------
 function route(){if(!D)return;const h=decodeURIComponent(location.hash.slice(1));
  let v="rynki";const m=h.match(/^i=([^/]+)(?:\/(\w+))?$/);
- if(m)v="detail";else if(["teraz","kalendarz","dziennik","wyniki","poradnik"].includes(h))v=h;
- document.querySelectorAll(".nav a").forEach(a=>a.setAttribute("aria-current",a.dataset.v===(v==="detail"?"rynki":v)?"page":"false"));
- if(v==="detail")viewDetail(m[1],m[2]);else({rynki:viewRynki,teraz:viewTeraz,kalendarz:viewKalendarz,dziennik:viewDziennik,wyniki:viewWyniki,poradnik:viewPoradnik})[v]();
+ if(m)v="detail";else if(["teraz","kalendarz","dziennik","wyniki","poradnik","gra"].includes(h))v=h;
+ document.querySelectorAll(".nav a").forEach(a=>a.setAttribute("aria-current",a.dataset.v===(v==="detail"?"rynki":v==="gra"?"wyniki":v)?"page":"false"));
+ if(v==="detail")viewDetail(m[1],m[2]);else({rynki:viewRynki,teraz:viewTeraz,kalendarz:viewKalendarz,dziennik:viewDziennik,wyniki:viewWyniki,poradnik:viewPoradnik,gra:viewGra})[v]();
  updBadge();
  if(!m||!m[2])window.scrollTo(0,0)}
 document.addEventListener("click",e=>{const t=e.target;
  const h=t.closest("[data-heart]");if(h){e.stopPropagation();const s=h.dataset.heart;fav=fav.includes(s)?fav.filter(x=>x!==s):[...fav,s];store.set("fav",fav);
   document.querySelectorAll(`[data-heart="${CSS.escape(s)}"]`).forEach(b=>{const f=fav.includes(s);b.setAttribute("aria-pressed",f);b.textContent=f?"♥":"♡"});if($("out"))renderList();updBadge();return}
+ const gs=t.closest("[data-guess]");if(gs){gameAns=gs.dataset.guess;const g=gameCur;gameScore.n++;if((gameAns==="up")===g.up)gameScore.you++;if((g.p>50)===g.up)gameScore.site++;store.set("gameScore",gameScore);viewGra();return}
+ if(t.closest("[data-gnext]")){gameCur=null;viewGra();window.scrollTo(0,0);return}
+ if(t.closest("[data-greset]")){gameScore={you:0,site:0,n:0};store.set("gameScore",gameScore);viewGra();return}
  const pe=t.closest("[data-per]");if(pe){perTab=pe.dataset.per;viewWyniki();return}
  const po=t.closest("[data-pot]");if(po){potH=po.dataset.pot;store.set("potH",potH);route();return}
  const te=t.closest("[data-test]");if(te){addTest(item(curSym()),te.dataset.test);return}

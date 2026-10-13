@@ -191,6 +191,14 @@ def update(tr, now, items, scan_items, picks_now):
             continue
         hit = out == (x["dir"] == "up")
         x["res"] = "trafiona" if hit else "chybiona"
+        # wirtualny portfel strategii: 1000 zł na każde wyzwolenie reguły (bez kosztów transakcji)
+        exit_px = O["c"][k] if x["type"] in ("intra", "rest") else O["c"][k + (1 if x["type"] == "next" else 5)]
+        base_px = x["px"] if x["type"] in ("intra", "rest") else O["c"][k]
+        ret = (exit_px / base_px - 1) * (1 if x["dir"] == "up" else -1)
+        x["ret"] = round(ret, 5)
+        pf = tr["stats"].setdefault("portfolio", {"n": 0, "pnl": 0.0, "curve": []})
+        pf["n"] += 1; pf["pnl"] += ret * 1000
+        pf["curve"] = (pf["curve"] + [[now.date().isoformat(), round(pf["pnl"], 2)]])[-300:]
         a = rs.setdefault(x["rid"], [0, 0]); a[0] += 1; a[1] += hit
         _day(tr, now, "rule", hit)
         st_, n_, h_ = rule_status(tr, x["rid"])
@@ -277,7 +285,7 @@ def summary(tr, names):
     rl.sort(key=lambda x: (x["n"] < 5, -x["hit"]))
     open_rules = [x for x in tr.get("rules_log", []) if x.get("res") is None][-30:]
     done_rules = [x for x in tr.get("rules_log", []) if x.get("res") in ("trafiona", "chybiona")][-30:][::-1]
-    return {"by_day": by_day, "by_week": by_week, "by_month": by_month, "rules_live": rl[:60],
+    return {"portfolio": tr["stats"].get("portfolio"), "by_day": by_day, "by_week": by_week, "by_month": by_month, "rules_live": rl[:60],
             "rules_open": open_rules, "rules_done": done_rules, "log": tr.get("log", [])[-60:][::-1],
             "preds": preds, "bins": bins, "pending": pending,
             "sim": st("sim"), "sims_open": [x for x in sims if not x.get("end")][-20:],

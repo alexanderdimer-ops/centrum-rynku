@@ -151,3 +151,38 @@ def sector(sym, H, get_json, history):
            f"{abs(rel) * 100:.0f} pkt proc.").replace(".", ",", 1)
     return {"sector": sec, "sector_pl": SECTOR_PL.get(sec, sec), "etf": etf, "etf_up": e_up, "etf_1m": e1m,
             "rel_3m": rel, "text": txt}
+
+
+def insiders(sym, get):
+    """Transakcje osób z zarządu i rady nadzorczej (raporty SEC Form 4, zebrane przez OpenInsider) – spółki z USA.
+    Zakupy za własne pieniądze to jeden z lepiej udokumentowanych sygnałów; sprzedaże bywają rutynowe (podatki, plany)."""
+    s = get(f"http://openinsider.com/screener?s={urllib.parse.quote(sym)}&fd=90&cnt=60", ttl=43200).decode("utf-8", "ignore")
+    i = s.find('class="tinytable"')
+    if i < 0:
+        return None
+    buy = sell = 0.0; buyers = set(); n_s = 0
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", s[i:], re.S)[1:]:
+        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+        if len(cells) < 12:
+            continue
+        typ, val = cells[6], cells[11].replace("$", "").replace(",", "").replace("+", "")
+        try:
+            val = abs(float(val))
+        except ValueError:
+            continue
+        if typ.startswith("P"):
+            buy += val; buyers.add(cells[4])
+        elif typ.startswith("S"):
+            sell += val; n_s += 1
+    if not buy and not sell:
+        return None
+    def m(x): return f"{x / 1e6:.1f} mln $".replace(".", ",")
+    if buy > 0:
+        d = 1 if len(buyers) >= 2 or buy > 1e6 else 0.5
+        txt = (f"Osoby z zarządu/rady KUPIŁY akcje za {m(buy)} w ostatnich 90 dniach ({len(buyers)} os.). "
+               "Zakupy za własne pieniądze to zwykle dobry znak – znają firmę najlepiej.")
+    else:
+        d = -0.5 if sell > 50e6 else 0
+        txt = (f"Osoby z zarządu/rady tylko sprzedawały akcje ({n_s} transakcji, {m(sell)}) w ostatnich 90 dniach. "
+               "Sprzedaże bywają rutynowe (podatki, wcześniej zaplanowane), więc to słaby sygnał.")
+    return {"buy": buy, "sell": sell, "buyers": len(buyers), "dir": d, "text": txt}

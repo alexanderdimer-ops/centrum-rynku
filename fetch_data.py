@@ -9,7 +9,7 @@ Opcjonalnie wysyła powiadomienia na telefon przez ntfy.sh (sekret NTFY_TOPIC w 
 import json, math, os, re, sys, time, hashlib, statistics as st, urllib.request, urllib.parse, datetime as dt
 import email.utils
 import xml.etree.ElementTree as ET
-import track, ml, extras, strategies
+import track, ml, extras, strategies, walkforward
 
 MODEL = {}  # wytrenowane modele uczenia maszynowego (ustawiane w głównym przebiegu)
 TRACK = {"stats": {}}  # stan samotestowania (do oceny reguł na żywo)
@@ -36,6 +36,7 @@ def final_verdict(it, ex, rules_now, my_events):
         add(1.0 if A["upside"] > 0.15 and A["buy_share"] > 0.6 else -1.0 if A["upside"] < -0.03 else 0,
             f"Analitycy: cena docelowa {A['upside'] * 100:+.0f}% od obecnej.")
     if "cot" in ex: add(ex["cot"]["dir"] * 0.7, "Duzi gracze (COT): " + ex["cot"]["text"][0].lower() + ex["cot"]["text"][1:])
+    if "insiders" in ex and ex["insiders"]["dir"]: add(ex["insiders"]["dir"] * 0.8, ex["insiders"]["text"])
     if "sector" in ex: add((0.4 if ex["sector"]["etf_up"] else -0.4) + (0.3 if ex["sector"]["rel_3m"] > 0.03 else -0.3 if ex["sector"]["rel_3m"] < -0.03 else 0),
                            ex["sector"]["text"])
     rv = 0.0; rtxt = []
@@ -1537,6 +1538,11 @@ def detect_changes(items, prev):
             add(it, "breakout", "up", f"Wybicie w górę: cena {fp(it['price'])} przebiła opór {fp(R)}.")
         if p["price"] >= S_ > it["price"]:
             add(it, "breakdown", "down", f"Cena {fp(it['price'])} spadła poniżej wsparcia {fp(S_)} – sygnał ostrzegawczy.")
+        v_ = (it.get("vol_ratio") or 0)
+        if v_ > 2.5 and not any(n_["date"] > (NOW - dt.timedelta(days=1)).isoformat() for n_ in it["news"]["week"]["items"]):
+            add(it, "anomaly", "up" if it["change"] > 0 else "down",
+                f"Nietypowo duży obrót ({v_:.1f}× więcej niż zwykle) bez wiadomości w mediach – ktoś może wiedzieć więcej. "
+                "Warto obserwować.".replace(".", ",", 1))
         sd = it["levels"]["sd60"]
         if sd and abs(it["change"]) / 100 > 2.5 * sd:
             add(it, "move", "up" if it["change"] > 0 else "down",
@@ -1699,6 +1705,7 @@ def _analyze(ins, bankier, cal, vix):
     if ins.get("earnings"):
         safe("analysts", lambda: extras.analysts(ins["symbol"], c[-1], get_json))
         safe("sector", lambda: extras.sector(ins["symbol"], H, get_json, history))
+        safe("insiders", lambda: extras.insiders(ins["symbol"], get))
     safe("earn", lambda: extras.earnings_moves(ins, H, get_json, get))
     safe("season", lambda: extras.seasonality(ins["symbol"], get_json, chart_url))
     if "cot" in ex:
@@ -1715,6 +1722,9 @@ def _analyze(ins, bankier, cal, vix):
         d_ = (2 if Sx["etf_up"] else -2) + (2 if Sx["rel_3m"] > 0.03 else -2 if Sx["rel_3m"] < -0.03 else 0)
         pot, plus, minus = adjust((pot, plus, minus), d_, Sx["text"])
         pot_l = adjust(pot_l, d_, Sx["text"])
+    if "insiders" in ex and ex["insiders"]["dir"]:
+        pot, plus, minus = adjust((pot, plus, minus), 4 * ex["insiders"]["dir"], ex["insiders"]["text"])
+        pot_l = adjust(pot_l, 4 * ex["insiders"]["dir"], ex["insiders"]["text"])
     if "season" in ex and ex["season"]["cur"] and ex["season"]["cur"]["n"] >= 10:
         Se = ex["season"]; d_ = (Se["cur"]["up"] - Se["base"]) * 20
         pot_l = adjust(pot_l, max(-3, min(3, d_)), Se["text"])
@@ -1724,7 +1734,8 @@ def _analyze(ins, bankier, cal, vix):
         ((pot_l[0] if pot_l and pot_l[0] is not None else 50) / 100) - 0.5,
         round(max(-0.5, min(0.5, ex["analysts"]["upside"])), 3) if "analysts" in ex else 0.0,
         (ex["cot"]["index"] / 100 - 0.5) if "cot" in ex else 0.0,
-        {"good": 1.0, "mid": 0.0, "bad": -1.0}[vkey]]
+        {"good": 1.0, "mid": 0.0, "bad": -1.0}[vkey],
+        0.0]  # miejsce na sygnały odkrytych strategii (uzupełniane niżej)
     strat = None
     try:
         hd = strategies.hourly_days(get_json, chart_url, ins["symbol"]) \
@@ -1739,6 +1750,7 @@ def _analyze(ins, bankier, cal, vix):
                  "now": strategies.triggered(usable, H, S["rc"], fh, session_live)}
     except Exception as e:
         print("Strategie pominięte:", ins["symbol"], e)
+    live_x[-1] = float(sum((1 if r["dir"] == "up" else -1) for r in (strat or {}).get("now", [])))
     for key, h in (("overall", "1d"), ("p_week", "1w")):
         lm = MODEL.get("live_" + h)
         if lm and ml.blend_weight(lm.get("test")) > 0:
@@ -1761,6 +1773,7 @@ def _analyze(ins, bankier, cal, vix):
                        + [v["text"] for k, v in ex.items() if v.get("text") and k != "season"]
                        + ([ex["season"]["text"]] if ex.get("season", {}).get("text") else []),
             "extras": ex, "ml": mlp, "live_x": live_x, "strategies": strat,
+            "vol_ratio": (H["v"][-1] / mean(H["v"][-21:-1])) if H["v"][-1] and mean(H["v"][-21:-1]) > 0 else None,
             "plan": plan, "levels": lv, "rsi": rs, "perf": pf,
             "today_vs_typical": abs(change) / lv["sd60"] if lv["sd60"] else None,
             "forecast": {"ranges": ranges, "analogs": an, "analog_state": an_desc},
@@ -1843,7 +1856,15 @@ if __name__ == "__main__":
     except Exception:
         old_model = None
     today = NOW.date().isoformat()
-    if not (old_model and old_model.get("date") == today and old_model.get("v") == ml.VERSION):
+    try:
+        replay = json.load(open("replay.json", encoding="utf-8"))
+    except Exception:
+        replay = None
+    need_model = not (old_model and old_model.get("date") == today and old_model.get("v") == ml.VERSION)
+    need_replay = not replay or (NOW - dt.datetime.fromisoformat(replay.get("time", "2000-01-01T00:00:00+00:00"))).days >= 7 \
+        or set(replay.get("per_sym", {})) - {i["symbol"] for i in instruments} or \
+        {i["symbol"] for i in instruments} - set(replay.get("per_sym", {}))
+    if need_model or need_replay:
         prepped = []
         syms = {i["symbol"]: i.get("ref") for i in instruments}
         for s_ in UNIVERSE:
@@ -1852,11 +1873,21 @@ if __name__ == "__main__":
             try:
                 H_ = history(s_)
                 if len(H_["c"]) >= 600:
-                    prepped.append((s_, ml.prep(H_, align(H_["d"], history(r_)) if r_ else None)))
+                    prepped.append((s_, ml.prep(H_, align(H_["d"], history(r_)) if r_ else None), H_["d"]))
             except Exception as e:
                 print("Model: pominięto", s_, e)
-        old_model = ml.train(prepped, today)
-        print("Wytrenowano model uczenia maszynowego na", len(prepped), "instrumentach")
+        if need_model:
+            old_model = ml.train([(a, b) for a, b, _ in prepped], today)
+            print("Wytrenowano model uczenia maszynowego na", len(prepped), "instrumentach")
+        if need_replay:  # „gra w przewidywanie” na historii – raz w tygodniu (albo po zmianie listy)
+            try:
+                replay = walkforward.run(prepped, {i["symbol"] for i in instruments})
+                if replay:
+                    replay["time"] = NOW.isoformat()
+                    json.dump(replay, open("replay.json", "w", encoding="utf-8"), ensure_ascii=False)
+                    print("Test kroczący na historii zakończony:", replay["all"])
+            except Exception as e:
+                print("Test kroczący pominięty:", e)
     MODEL.update({h: old_model[h] for h in ("1d", "1w", "1m") if h in old_model})
     for h in ("1d", "1w"):
         if old_model.get("live", {}).get(h):
@@ -1903,6 +1934,20 @@ if __name__ == "__main__":
     changes, new_changes = detect_changes(items, prev)
     world = world_news((prev or {}).get("world"), instruments)
     notify(items, new_changes)
+    if os.environ.get("NTFY_TOPIC") and NOW.weekday() == 6 and NOW.hour >= 17:
+        wk = NOW.date().isoformat()
+        if tr.get("weekly_sent") != wk:
+            best = sorted(items, key=lambda i: -i["final"]["score"])[:3]
+            T_ = track.summary(tr, {})
+            msg = ("Najlepsze na nowy tydzień: " + ", ".join(f"{i['name']} ({i['final']['title'].lower()})" for i in best) + ". "
+                   + " ".join(f"Trafność {k}: {v['hit']}% ({v['n']})." for k, v in (T_["preds"] or {}).items() if v))
+            try:
+                urllib.request.urlopen(urllib.request.Request("https://ntfy.sh/", data=json.dumps(
+                    {"topic": os.environ["NTFY_TOPIC"], "title": "Centrum rynku – raport tygodniowy", "message": msg,
+                     "click": SITE + "#wyniki"}).encode(), headers={"Content-Type": "application/json"}), timeout=15)
+                tr["weekly_sent"] = wk
+            except Exception as e:
+                print("Raport tygodniowy nieudany:", e)
     allr = [dict(r, sym=it["symbol"], name=it["name"]) for it in items for r in (it.get("strategies") or {}).get("rules", [])]
     strat_sum = {"tested": sum((it.get("strategies") or {}).get("tested", 0) for it in items), "found": len(allr),
                  "ok": sum(r["status"] == "ok" for r in allr), "fail": sum(r["status"] == "fail" for r in allr),
@@ -1923,7 +1968,7 @@ if __name__ == "__main__":
                                      "avgR": sum(r["avgR"] * r["n"] for r in rows) / n_}
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump({"updated": NOW.isoformat(), "pulse": pulse(), "fx": fx, "calendar": cal, "items": items,
-                   "changes": changes, "scan": sc, "world": world, "picks": picks, "strat": strat_sum,
+                   "changes": changes, "scan": sc, "world": world, "picks": picks, "strat": strat_sum, "replay": replay,
                    "fg_crypto": FG or None,
                    "track": track.summary(tr, names),
                    "ml": {"date": old_model.get("date"), "live": old_model.get("live", {}).get("summary"),
